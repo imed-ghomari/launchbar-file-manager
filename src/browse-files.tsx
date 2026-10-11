@@ -255,7 +255,7 @@ function FileBrowser(props: {
     <List
       isLoading={isLoading}
       navigationTitle={crumbs}
-      searchBarPlaceholder={`Filter + ↑↓, X select, Tab transfer, → enter, ← up, Space open/preview (${selected.length} selected)`}
+      searchBarPlaceholder={`${entries.length} items · ${selected.length} selected — ↑↓ filter, X select, Tab transfer, ← up`}
       searchText={searchText}
       onSearchTextChange={setSearchText}
       filtering={true}
@@ -263,13 +263,10 @@ function FileBrowser(props: {
       onSelectionChange={(id) => setHighlightId(id ?? undefined)}
       isShowingDetail={props.showDetail && entries.length > 0}
     >
-      <List.Section
-        title={
-          selected.length > 0
-            ? `${entries.length} items · ${selected.length} selected · Tab transfers`
-            : `${entries.length} items`
-        }
-      >
+      {/* No List.Section: a section header would scroll away on long lists
+          and shift the content. Flat items keep the list consistent; the
+          counts live in the always-visible search bar instead. */}
+      <>
         {entries.map((entry) => (
           <FileRow
             key={entry.fullPath}
@@ -293,7 +290,7 @@ function FileBrowser(props: {
             onGoUp={goUp}
           />
         ))}
-      </List.Section>
+      </>
       {entries.length === 0 && !isLoading ? (
         <List.EmptyView
           icon={Icon.Folder}

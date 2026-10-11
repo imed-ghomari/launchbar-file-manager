@@ -1,14 +1,11 @@
 import { useSyncExternalStore } from "react";
 
-// Global selection basket + pending copy/move operation, shared across every
-// pushed FileBrowser view. Per-view useState loses the selection on push/pop,
-// so this module singleton survives navigation until the user pastes, clears,
-// or quits the command.
-
-export type Operation = "copy" | "move" | null;
+// Global selection basket shared across every pushed view (browser,
+// transfer tree, forms). Per-view useState would lose the selection on
+// push/pop, so this module singleton survives navigation until the user
+// pastes, clears, cancels, or quits the command.
 
 let selected: string[] = [];
-let operation: Operation = null;
 let version = 0;
 const listeners = new Set<() => void>();
 
@@ -30,24 +27,6 @@ function getVersion(): number {
 
 export function getSelection(): string[] {
   return selected;
-}
-
-export function getOperation(): Operation {
-  return operation;
-}
-
-export function setOperation(op: Exclude<Operation, null>): void {
-  if (operation !== op) {
-    operation = op;
-    emit();
-  }
-}
-
-export function clearOperation(): void {
-  if (operation !== null) {
-    operation = null;
-    emit();
-  }
 }
 
 export function togglePath(fullPath: string): void {
@@ -73,13 +52,6 @@ export function addPaths(paths: string[]): void {
   }
 }
 
-export function ensurePath(fullPath: string): void {
-  if (!selected.includes(fullPath)) {
-    selected = [...selected, fullPath];
-    emit();
-  }
-}
-
 export function removePaths(paths: string[]): void {
   if (paths.length === 0) return;
   const rm = new Set(paths);
@@ -90,36 +62,27 @@ export function removePaths(paths: string[]): void {
   }
 }
 
-/** Clears both the basket and any pending copy/move operation. */
+/** Clears the whole basket (used after paste, cancel, or Esc out of transfer). */
 export function clearAll(): void {
-  if (selected.length > 0 || operation !== null) {
+  if (selected.length > 0) {
     selected = [];
-    operation = null;
     emit();
   }
 }
 
 export function useGlobalSelection(): {
   selected: string[];
-  operation: Operation;
   toggle: (p: string) => void;
   add: (paths: string[]) => void;
-  ensure: (p: string) => void;
   remove: (paths: string[]) => void;
   clear: () => void;
-  setOp: (op: Exclude<Operation, null>) => void;
-  clearOp: () => void;
 } {
   useSyncExternalStore(subscribe, getVersion, getVersion);
   return {
     selected: getSelection(),
-    operation: getOperation(),
     toggle: togglePath,
     add: addPaths,
-    ensure: ensurePath,
     remove: removePaths,
     clear: clearAll,
-    setOp: setOperation,
-    clearOp: clearOperation,
   };
 }

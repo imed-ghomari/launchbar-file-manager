@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Action,
   ActionPanel,
@@ -16,6 +16,7 @@ import {
   showToast,
   useNavigation,
   Keyboard,
+  LocalStorage,
 } from "@raycast/api";
 import { usePromise } from "@raycast/utils";
 import { promises as fs } from "node:fs";
@@ -60,14 +61,54 @@ function getPrefs(): Prefs {
   }
 }
 
+const STATE_KEY = "launchbar-file-manager:browser-state";
+
 export default function Command() {
   const p = getPrefs();
   const start = expandHome(p.startingPath || "~");
   const [showHidden, setShowHidden] = useState<boolean>(!!p.showHiddenDefault);
   const [showDetail, setShowDetail] = useState(false);
+  const [restoredDir, setRestoredDir] = useState<string | null>(null);
+  const [ready, setReady] = useState(false);
+
+  // Resume where you left off: Esc always exits (Raycast reserves it on root
+  // views), so restore the last folder + basket on reopen instead of losing
+  // context. Deliberate deselect is ⌘⇧X / X.
+  useEffect(() => {
+    (async () => {
+      try {
+        const raw = await LocalStorage.getItem<string>(STATE_KEY);
+        if (raw) {
+          const saved = JSON.parse(raw) as {
+            dir?: unknown;
+            selected?: unknown;
+          };
+          if (typeof saved.dir === "string") {
+            try {
+              const st = await fs.stat(saved.dir);
+              if (st.isDirectory()) setRestoredDir(saved.dir);
+            } catch {
+              // Unreadable — fall back to home below.
+            }
+          }
+          if (Array.isArray(saved.selected)) {
+            addPaths(saved.selected.filter((s) => typeof s === "string"));
+          }
+        }
+      } catch {
+        // Corrupt state — fresh start.
+      } finally {
+        setReady(true);
+      }
+    })();
+  }, []);
+
+  if (!ready) {
+    return <List isLoading={true} searchBarPlaceholder="Restoring…" />;
+  }
   return (
     <FileBrowser
-      initialPath={start}
+      initialPath={restoredDir ?? start}
       homePath={start}
       showHidden={showHidden}
       showDetail={showDetail}
@@ -101,6 +142,15 @@ function FileBrowser(props: {
   // Global basket: survives push/pop so the selection stays visible across
   // navigation. Copy/move happens only via Tab → transfer tree.
   const { selected } = useGlobalSelection();
+
+  // Mirror folder + basket to storage on every change, so an Esc (which
+  // always exits — Raycast reserves it) resumes instead of losing context.
+  useEffect(() => {
+    void LocalStorage.setItem(
+      STATE_KEY,
+      JSON.stringify({ dir: currentPath, selected }),
+    );
+  }, [currentPath, selected]);
 
   const { data, isLoading, revalidate } = usePromise(
     async (dir: string, hidden: boolean) => {
@@ -169,7 +219,12 @@ function FileBrowser(props: {
         sources={sources}
         initialPath={props.homePath}
         showHidden={props.showHidden}
-        onDone={refresh}
+        onDone={(destDir) => {
+          // Reveal the results: open the destination, not the origin.
+          setSearchText("");
+          setCurrentPath(destDir);
+          refresh();
+        }}
       />,
     );
   }

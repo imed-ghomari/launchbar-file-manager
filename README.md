@@ -4,7 +4,7 @@ LaunchBar-style file browsing inside Raycast — miles better than the built-in 
 
 ## Commands
 
-- **Browse Files** (`browse-files.tsx`): single-view drill — `→` enters, `←` goes up, `Esc` exits. `Space` opens folders / Quick Looks files, `X` selects. The ONE transfer flow: highlight one item (or `X` several), press `Tab` → transfer tree from home → `←`/`→` navigate → `Enter` confirms the folder → choose Copy or Move. `Esc` in transfer cancels + deselects. Ops: Rename, Duplicate, Compress to ZIP (`⌘⇧Z`), Extract Here (zips), Trash, New Folder/File, Copy Path.
+- **Browse Files** (`browse-files.tsx`): single-view drill — `→` enters, `←` goes up, `Esc` exits. `Space` opens folders / Quick Looks files, `X` selects. The ONE transfer flow: highlight one item (or `X` several), press `Tab` → transfer tree from home → `←`/`→` navigate → `Enter` on a folder transfers INTO it (on a file row, into the displayed folder) → choose Copy or Move. `Esc` in transfer cancels + deselects. After transfer, the destination opens so you see results. Ops: Rename, Duplicate, Compress to ZIP (`⌘⇧Z`), Extract Here (zips), Trash, New Folder/File, Copy Path.
 - **Act on Finder Selection** (`finder-selection.tsx`): Instant-Send style — select files in Finder, run command, act on them.
 
 ## Develop

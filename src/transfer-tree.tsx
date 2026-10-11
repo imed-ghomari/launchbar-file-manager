@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Action,
   ActionPanel,
-  Color,
   Icon,
   List,
   Toast,
@@ -44,7 +43,8 @@ export function TransferTree(props: {
   sources: string[];
   initialPath: string;
   showHidden: boolean;
-  onDone: () => void;
+  /** Called with the destination folder so the browser can reveal results. */
+  onDone: (destDir: string) => void;
 }) {
   const { pop } = useNavigation();
   const { sources } = props;
@@ -105,9 +105,9 @@ export function TransferTree(props: {
     pop();
   }
 
-  async function execute(mode: "copy" | "move") {
+  async function execute(mode: "copy" | "move", destDir: string) {
     for (const src of sources) {
-      if (src === currentPath || isInside(currentPath, src)) {
+      if (src === destDir || isInside(destDir, src)) {
         await showToast({
           style: Toast.Style.Failure,
           title: `Cannot ${mode} a folder into itself`,
@@ -115,11 +115,11 @@ export function TransferTree(props: {
         });
         return;
       }
-      if (path.dirname(src) === currentPath && mode === "move") {
+      if (path.dirname(src) === destDir && mode === "move") {
         await showToast({
           style: Toast.Style.Failure,
           title: "Already in this folder",
-          message: currentPath,
+          message: destDir,
         });
         return;
       }
@@ -127,14 +127,14 @@ export function TransferTree(props: {
     const verb = mode === "copy" ? "Copying" : "Moving";
     const toast = await showToast({
       style: Toast.Style.Animated,
-      title: `${verb} ${sources.length} item${sources.length === 1 ? "" : "s"}…`,
-      message: `→ ${currentPath}`,
+      title: `${verb} ${sources.length} Item${sources.length === 1 ? "" : "s"}…`,
+      message: `→ ${destDir}`,
     });
     try {
       if (mode === "copy") {
         const r = await copyManyWithProgress(
           sources,
-          currentPath,
+          destDir,
           toast,
           "Copying",
         );
@@ -144,29 +144,24 @@ export function TransferTree(props: {
           toast.message = r.errors.slice(0, 3).join("\n");
         } else {
           toast.style = Toast.Style.Success;
-          toast.title = `Copied ${r.copied} item${r.copied === 1 ? "" : "s"}`;
-          toast.message = `→ ${currentPath}`;
+          toast.title = `Copied ${r.copied} Item${r.copied === 1 ? "" : "s"}`;
+          toast.message = `→ ${destDir}`;
         }
       } else {
-        const r = await moveManyWithProgress(
-          sources,
-          currentPath,
-          toast,
-          "Moving",
-        );
+        const r = await moveManyWithProgress(sources, destDir, toast, "Moving");
         if (r.errors.length > 0) {
           toast.style = Toast.Style.Failure;
           toast.title = `Moved with ${r.errors.length} errors`;
           toast.message = r.errors.slice(0, 3).join("\n");
         } else {
           toast.style = Toast.Style.Success;
-          toast.title = `Moved ${r.moved} item${r.moved === 1 ? "" : "s"}`;
-          toast.message = `→ ${currentPath}`;
+          toast.title = `Moved ${r.moved} Item${r.moved === 1 ? "" : "s"}`;
+          toast.message = `→ ${destDir}`;
         }
         removePaths(sources);
       }
       clearAll();
-      props.onDone();
+      props.onDone(destDir);
       pop();
     } catch (e) {
       toast.style = Toast.Style.Failure;
@@ -175,89 +170,52 @@ export function TransferTree(props: {
     }
   }
 
-  // Enter anywhere in this tree confirms the CURRENT folder, then forces the
-  // Copy vs Move choice. Shared as every row's primary action.
-  const transferMenu = (
-    <ActionPanel.Submenu
-      title={`Transfer ${sources.length} Item${sources.length === 1 ? "" : "s"}…`}
-    >
-      <Action
-        title={`Copy Here (${currentPath})`}
-        icon={Icon.Clipboard}
-        onAction={() => execute("copy")}
-      />
-      <Action
-        title={`Move Here (${currentPath})`}
-        icon={Icon.Move}
-        onAction={() => execute("move")}
-      />
-    </ActionPanel.Submenu>
-  );
-
-  const hereTitle = `Transfer ${sources.length} Item${sources.length === 1 ? "" : "s"} Here`;
+  // Enter on a highlighted folder targets THAT folder; Enter on a file row
+  // targets the displayed folder (files can't contain anything).
+  function transferMenu(destDir: string, intoName: string | null) {
+    const title = intoName ? `Transfer Into ${intoName}…` : "Transfer…";
+    const copyTitle = intoName ? `Copy Into ${intoName}` : "Copy Here";
+    const moveTitle = intoName ? `Move Into ${intoName}` : "Move Here";
+    return (
+      <ActionPanel.Submenu title={title}>
+        <Action
+          title={copyTitle}
+          icon={Icon.Clipboard}
+          onAction={() => execute("copy", destDir)}
+        />
+        <Action
+          title={moveTitle}
+          icon={Icon.Move}
+          onAction={() => execute("move", destDir)}
+        />
+      </ActionPanel.Submenu>
+    );
+  }
 
   return (
     <List
       isLoading={isLoading}
       navigationTitle={`Transfer → ${crumbs}`}
-      searchBarPlaceholder="←/→ navigate, Enter transfers here, Esc cancels"
+      searchBarPlaceholder="←/→ navigate, Enter confirms, Esc cancels"
       searchText={searchText}
       onSearchTextChange={setSearchText}
       filtering={false}
     >
       <List.Section
         title={`${sourceNames.slice(0, 3).join(", ")}${sourceNames.length > 3 ? ` +${sourceNames.length - 3} more` : ""}`}
-        subtitle="Enter confirms this folder, then choose Copy or Move"
+        subtitle={`${visible.length} items`}
       >
-        {/* HERE row is always visible — never filtered out */}
-        <List.Item
-          title={hereTitle}
-          subtitle={currentPath}
-          icon={{ source: Icon.Switch, tintColor: Color.Green }}
-          keywords={["here", "confirm", "transfer", "destination", currentPath]}
-          quickLook={{
-            path: currentPath,
-            name: path.basename(currentPath) || currentPath,
-          }}
-          actions={
-            <ActionPanel>
-              {transferMenu}
-              <Action
-                title="Go up"
-                icon={Icon.ArrowLeft}
-                shortcut={{ modifiers: [], key: "arrowLeft" }}
-                onAction={goUp}
-              />
-              <Action
-                title="Cancel Transfer"
-                icon={Icon.XMarkCircle}
-                onAction={cancel}
-              />
-              <ActionPanel.Section title="Go">
-                {FAVORITES.map((f) => (
-                  <Action
-                    key={f.path}
-                    title={`Go to ${f.title}`}
-                    icon={Icon.House}
-                    onAction={() => jumpTo(f.path)}
-                  />
-                ))}
-              </ActionPanel.Section>
-            </ActionPanel>
-          }
-        />
         {visible.map((entry) =>
           entry.isDirectory ? (
             <List.Item
               key={entry.fullPath}
               title={entry.name}
-              subtitle="→ to enter, Enter transfers here"
               icon={Icon.Folder}
               keywords={[entry.name]}
               quickLook={{ path: entry.fullPath, name: entry.name }}
               actions={
                 <ActionPanel>
-                  {transferMenu}
+                  {transferMenu(entry.fullPath, entry.name)}
                   <Action
                     title="Enter Folder"
                     icon={Icon.ArrowRight}
@@ -301,7 +259,7 @@ export function TransferTree(props: {
               quickLook={{ path: entry.fullPath, name: entry.name }}
               actions={
                 <ActionPanel>
-                  {transferMenu}
+                  {transferMenu(currentPath, null)}
                   <Action.ToggleQuickLook
                     shortcut={{ modifiers: [], key: "space" }}
                   />

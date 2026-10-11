@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import * as nfs from "node:fs";
 import * as path from "node:path";
 import { Toast } from "@raycast/api";
-import trash from "trash";
+import { safeTrash } from "./trash-safe";
 
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "0 B";
@@ -283,7 +283,10 @@ export async function moveManyWithProgress(
       }
     }
     try {
-      if (copiedSrcs.length > 0) await trash(copiedSrcs);
+      if (copiedSrcs.length > 0) {
+        const t = await safeTrash(copiedSrcs);
+        errors.push(...t.errors);
+      }
     } catch (e) {
       errors.push(`trash originals: ${String(e)}`);
     }

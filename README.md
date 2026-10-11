@@ -4,7 +4,7 @@ LaunchBar-style file browsing inside Raycast — miles better than the built-in 
 
 ## Commands
 
-- **Browse Files** (`browse-files.tsx`): drill with `→` to enter, `←` for parent, type to filter. `Space` opens folders / Quick Looks files, `X` selects, `⌘⇧C` marks copy, `⌘⇧M` marks move. The browser itself is the destination: navigate anywhere and `Enter` on the pinned Paste row pastes there. Ops: Rename, Duplicate, Trash, New Folder/File, Copy Path.
+- **Browse Files** (`browse-files.tsx`): drill with `→` to enter, `←` for parent (`←` on the first view goes up instead of exiting). `Space` opens folders / Quick Looks files, `X` selects, `⌘⇧C` marks copy, `⌘⇧M` marks move. The browser itself is the destination: navigate anywhere and `Enter` on the pinned Paste row pastes there. Ops: Rename, Duplicate, Compress to ZIP (`⌘⇧Z`), Extract Here (zips), Trash, New Folder/File, Copy Path.
 - **Act on Finder Selection** (`finder-selection.tsx`): Instant-Send style — select files in Finder, run command, act on them.
 
 ## Develop

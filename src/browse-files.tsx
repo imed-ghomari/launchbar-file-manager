@@ -20,7 +20,6 @@ import {
 import { usePromise } from "@raycast/utils";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import trash from "trash";
 import {
   FAVORITES,
   FileEntry,
@@ -41,6 +40,13 @@ import {
   useGlobalSelection,
 } from "./selection-store";
 import { copyManyWithProgress, moveManyWithProgress } from "./copy-progress";
+import {
+  archiveDisplayName,
+  compressMany,
+  compressOne,
+  extractZip,
+} from "./archive";
+import { safeTrash, shortError } from "./trash-safe";
 
 type Prefs = {
   startingPath?: string;
@@ -65,6 +71,7 @@ export default function Command() {
       initialPath={start}
       showHidden={showHidden}
       showDetail={showDetail}
+      canPop={false}
       onToggleHidden={() => setShowHidden((v) => !v)}
       onToggleDetail={() => setShowDetail((v) => !v)}
     />
@@ -86,6 +93,12 @@ function FileBrowser(props: {
   initialPath: string;
   showHidden: boolean;
   showDetail: boolean;
+  /**
+   * Whether this view was pushed on top of another browser view (so pop()
+   * returns to it). The very first view has canPop=false: popping it would
+   * exit the whole extension, so back-navigation pushes the parent instead.
+   */
+  canPop: boolean;
   onToggleHidden: () => void;
   onToggleDetail: () => void;
 }) {
@@ -170,30 +183,39 @@ function FileBrowser(props: {
   // FIX (back-nav bug): previously enterFolder/jumpTo mutated this view's
   // currentPath AND pushed a new view, corrupting the parent when popping.
   // Now each pushed view owns its path — no mutation of the parent.
-  function enterFolder(folderPath: string) {
+  function pushView(dir: string, canPop: boolean) {
     push(
       <FileBrowser
-        initialPath={folderPath}
+        initialPath={dir}
         showHidden={props.showHidden}
         showDetail={props.showDetail}
+        canPop={canPop}
         onToggleHidden={props.onToggleHidden}
         onToggleDetail={props.onToggleDetail}
       />,
     );
   }
 
+  function enterFolder(folderPath: string) {
+    pushView(folderPath, true);
+  }
+
   function jumpTo(target: string) {
     const resolved = expandHome(target);
     if (resolved === currentPath) return;
-    push(
-      <FileBrowser
-        initialPath={resolved}
-        showHidden={props.showHidden}
-        showDetail={props.showDetail}
-        onToggleHidden={props.onToggleHidden}
-        onToggleDetail={props.onToggleDetail}
-      />,
-    );
+    pushView(resolved, true);
+  }
+
+  // Back navigation that never exits the extension: on the first view
+  // (canPop=false) there is nothing to pop back to, so going up pushes the
+  // parent folder instead of closing the whole command.
+  function goBack() {
+    if (props.canPop) {
+      pop();
+      return;
+    }
+    const parent = parentDir(currentPath);
+    if (parent !== currentPath) pushView(parent, false);
   }
 
   // The main browser IS the destination: paste the global basket into the
@@ -334,6 +356,15 @@ function FileBrowser(props: {
                         trashPaths([...selected], () => refresh())
                       }
                     />
+                    <Action
+                      title="Compress Selected to ZIP Here"
+                      icon={Icon.Box}
+                      onAction={() =>
+                        compressSelected([...selected], currentPath, () =>
+                          refresh(),
+                        )
+                      }
+                    />
                     <Action.CopyToClipboard
                       title="Copy Selected Paths"
                       content={selected.join("\n")}
@@ -351,7 +382,7 @@ function FileBrowser(props: {
                       title="Go Back"
                       icon={Icon.ArrowLeft}
                       shortcut={{ modifiers: [], key: "arrowLeft" }}
-                      onAction={() => pop()}
+                      onAction={goBack}
                     />
                   ) : null}
                 </ActionPanel>
@@ -409,6 +440,15 @@ function FileBrowser(props: {
                         trashPaths([...selected], () => refresh())
                       }
                     />
+                    <Action
+                      title="Compress Selected to ZIP Here"
+                      icon={Icon.Box}
+                      onAction={() =>
+                        compressSelected([...selected], currentPath, () =>
+                          refresh(),
+                        )
+                      }
+                    />
                     <Action.CopyToClipboard
                       title="Copy Selected Paths"
                       content={selected.join("\n")}
@@ -426,7 +466,7 @@ function FileBrowser(props: {
                       title="Go Back"
                       icon={Icon.ArrowLeft}
                       shortcut={{ modifiers: [], key: "arrowLeft" }}
-                      onAction={() => pop()}
+                      onAction={goBack}
                     />
                   ) : null}
                 </ActionPanel>
@@ -450,13 +490,13 @@ function FileBrowser(props: {
                   title="Go Back"
                   icon={Icon.ArrowLeft}
                   shortcut={{ modifiers: [], key: "arrowLeft" }}
-                  onAction={() => pop()}
+                  onAction={goBack}
                 />
                 <Action
                   title="Go Back Alternative"
                   icon={Icon.ArrowLeft}
                   shortcut={{ modifiers: ["cmd"], key: "[" }}
-                  onAction={() => pop()}
+                  onAction={goBack}
                 />
               </ActionPanel>
             }
@@ -484,7 +524,7 @@ function FileBrowser(props: {
             onChanged={refresh}
             onToggleHidden={props.onToggleHidden}
             onToggleDetail={props.onToggleDetail}
-            onGoBack={() => pop()}
+            onGoBack={goBack}
           />
         ))}
       </List.Section>
@@ -526,7 +566,7 @@ function FileBrowser(props: {
                   title="Go Back"
                   icon={Icon.ArrowLeft}
                   shortcut={{ modifiers: [], key: "arrowLeft" }}
-                  onAction={() => pop()}
+                  onAction={goBack}
                 />
               ) : null}
             </ActionPanel>
@@ -742,6 +782,19 @@ function FileRow(props: {
               shortcut={{ modifiers: ["cmd"], key: "d" }}
               onAction={() => duplicateEntry(entry, onChanged)}
             />
+            <Action
+              title="Compress to ZIP"
+              icon={Icon.Box}
+              shortcut={{ modifiers: ["cmd", "shift"], key: "z" }}
+              onAction={() => compressEntry(entry, onChanged)}
+            />
+            {entry.extension === ".zip" ? (
+              <Action
+                title="Extract Here"
+                icon={Icon.Upload}
+                onAction={() => extractEntry(entry, onChanged)}
+              />
+            ) : null}
             <Action
               title="Move to Trash"
               icon={Icon.Trash}
@@ -1075,18 +1128,19 @@ async function moveToTrash(entry: FileEntry, onChanged: () => void) {
     },
   });
   if (!ok) return;
-  try {
-    await trash([entry.fullPath]);
-    removePaths([entry.fullPath]);
-    await showToast({ style: Toast.Style.Success, title: "Moved to Trash" });
-    onChanged();
-  } catch (e) {
+  const { trashed, errors } = await safeTrash([entry.fullPath]);
+  removePaths(trashed);
+  if (errors.length > 0) {
     await showToast({
       style: Toast.Style.Failure,
       title: "Trash failed",
-      message: String(e),
+      message: errors.slice(0, 2).join("\n"),
     });
+  } else {
+    removePaths([entry.fullPath]);
+    await showToast({ style: Toast.Style.Success, title: "Moved to Trash" });
   }
+  onChanged();
 }
 
 async function trashPaths(fullPaths: string[], onDone: () => void) {
@@ -1102,19 +1156,88 @@ async function trashPaths(fullPaths: string[], onDone: () => void) {
     },
   });
   if (!ok) return;
-  try {
-    await trash(fullPaths);
-    removePaths(fullPaths);
-    await showToast({
-      style: Toast.Style.Success,
-      title: `Trashed ${fullPaths.length} item${fullPaths.length === 1 ? "" : "s"}`,
-    });
-    onDone();
-  } catch (e) {
+  const { trashed, errors } = await safeTrash(fullPaths);
+  removePaths(trashed);
+  if (errors.length > 0) {
     await showToast({
       style: Toast.Style.Failure,
-      title: "Trash failed",
-      message: String(e),
+      title: `Trash failed (${errors.length} item${errors.length === 1 ? "" : "s"})`,
+      message: errors.slice(0, 2).join("\n"),
     });
+  } else {
+    await showToast({
+      style: Toast.Style.Success,
+      title: `Trashed ${trashed.length} item${trashed.length === 1 ? "" : "s"}`,
+    });
+  }
+  onDone();
+}
+
+async function compressEntry(entry: FileEntry, onChanged: () => void) {
+  const toast = await showToast({
+    style: Toast.Style.Animated,
+    title: `Compressing ${entry.name}…`,
+  });
+  try {
+    const { dest } = await compressOne(
+      entry.fullPath,
+      path.dirname(entry.fullPath),
+    );
+    toast.style = Toast.Style.Success;
+    toast.title = "Compressed";
+    toast.message = `→ ${path.basename(dest)}`;
+    onChanged();
+  } catch (e) {
+    toast.style = Toast.Style.Failure;
+    toast.title = "Compress failed";
+    toast.message = shortError(e);
+  }
+}
+
+async function extractEntry(entry: FileEntry, onChanged: () => void) {
+  const toast = await showToast({
+    style: Toast.Style.Animated,
+    title: `Extracting ${entry.name}…`,
+  });
+  try {
+    await extractZip(entry.fullPath, path.dirname(entry.fullPath));
+    toast.style = Toast.Style.Success;
+    toast.title = "Extracted";
+    toast.message = `→ ${path.dirname(entry.fullPath)}`;
+    onChanged();
+  } catch (e) {
+    toast.style = Toast.Style.Failure;
+    toast.title = "Extract failed";
+    toast.message = shortError(e);
+  }
+}
+
+async function compressSelected(
+  fullPaths: string[],
+  destDir: string,
+  onDone: () => void,
+) {
+  if (fullPaths.length === 0) return;
+  const toast = await showToast({
+    style: Toast.Style.Animated,
+    title: `Compressing ${fullPaths.length} items…`,
+  });
+  try {
+    const { dest } = await compressMany(
+      fullPaths,
+      destDir,
+      archiveDisplayName(fullPaths),
+      (done, total, name) => {
+        toast.message = `${done}/${total} staged · ${name.slice(0, 60)}`;
+      },
+    );
+    toast.style = Toast.Style.Success;
+    toast.title = "Compressed";
+    toast.message = `→ ${path.basename(dest)}`;
+    onDone();
+  } catch (e) {
+    toast.style = Toast.Style.Failure;
+    toast.title = "Compress failed";
+    toast.message = shortError(e);
   }
 }

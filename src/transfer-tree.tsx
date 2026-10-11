@@ -72,6 +72,15 @@ export function TransferTree(props: {
   );
 
   const entries = useMemo(() => data ?? [], [data]);
+
+  // Release the programmatic highlight once it has landed on a rendered
+  // row (see browser for why presence-gating matters).
+  useEffect(() => {
+    if (highlightId === undefined) return;
+    if (!entries.some((e) => e.fullPath === highlightId)) return;
+    const t = setTimeout(() => setHighlightId(undefined), 350);
+    return () => clearTimeout(t);
+  }, [highlightId, entries]);
   const visible = useMemo(
     () => entries.filter((e) => matchesFilter(e.name, searchText)),
     [entries, searchText],
@@ -91,11 +100,9 @@ export function TransferTree(props: {
 
   function goUp() {
     if (currentPath === parentDir(currentPath)) return;
-    // Land the highlight on the folder just left, then release control so
-    // arrows scroll natively. The timeout is a backstop in case the
-    // selection callback doesn't fire for the programmatic landing.
+    // Land the highlight on the folder just left (released by the effect
+    // below once it has actually landed).
     setHighlightId(currentPath);
-    setTimeout(() => setHighlightId(undefined), 100);
     setSearchText("");
     setCurrentPath(parentDir(currentPath));
   }
@@ -209,7 +216,9 @@ export function TransferTree(props: {
       onSearchTextChange={setSearchText}
       filtering={false}
       selectedItemId={highlightId}
-      onSelectionChange={() => setHighlightId(undefined)}
+      onSelectionChange={(id) => {
+        if (id) setHighlightId(undefined);
+      }}
     >
       <List.Section
         title={`${sourceNames.slice(0, 3).join(", ")}${sourceNames.length > 3 ? ` +${sourceNames.length - 3} more` : ""}`}

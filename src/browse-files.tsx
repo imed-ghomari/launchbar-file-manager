@@ -164,6 +164,17 @@ function FileBrowser(props: {
 
   const entries = useMemo(() => data ?? [], [data]);
   const selectedSet = useMemo(() => new Set(selected), [selected]);
+
+  // Release the programmatic highlight once it has landed on a rendered
+  // row. Holding it longer would re-center the list on every arrow key;
+  // releasing before the row exists (loading gap) would drop the landing
+  // entirely — so wait for the target to be present first.
+  useEffect(() => {
+    if (highlightId === undefined) return;
+    if (!entries.some((e) => e.fullPath === highlightId)) return;
+    const t = setTimeout(() => setHighlightId(undefined), 350);
+    return () => clearTimeout(t);
+  }, [highlightId, entries]);
   const filteredEntries = useMemo(
     () => entries.filter((e) => matchesFilter(e.name, searchText)),
     [entries, searchText],
@@ -193,11 +204,9 @@ function FileBrowser(props: {
 
   function goUp() {
     if (currentPath === parentDir(currentPath)) return;
-    // Land the highlight on the folder just left, then release control so
-    // arrows scroll natively. The timeout is a backstop in case the
-    // selection callback doesn't fire for the programmatic landing.
+    // Land the highlight on the folder just left (released by the effect
+    // below once it has actually landed).
     setHighlightId(currentPath);
-    setTimeout(() => setHighlightId(undefined), 100);
     setSearchText("");
     setCurrentPath(parentDir(currentPath));
   }
@@ -266,7 +275,11 @@ function FileBrowser(props: {
       onSearchTextChange={setSearchText}
       filtering={true}
       selectedItemId={highlightId}
-      onSelectionChange={() => setHighlightId(undefined)}
+      onSelectionChange={(id) => {
+        // Real landing or user move — release. Null (loading gap or
+        // filtered-out target) must NOT clear, or the landing is lost.
+        if (id) setHighlightId(undefined);
+      }}
       isShowingDetail={props.showDetail && entries.length > 0}
     >
       {/* No List.Section: a section header would scroll away on long lists

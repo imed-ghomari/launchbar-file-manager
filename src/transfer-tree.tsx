@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   Action,
   ActionPanel,
+  Form,
   Icon,
   List,
   Toast,
@@ -9,6 +10,7 @@ import {
   useNavigation,
 } from "@raycast/api";
 import { usePromise } from "@raycast/utils";
+import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import {
   FAVORITES,
@@ -315,6 +317,36 @@ export function TransferTree(props: {
           ),
         )}
       </List.Section>
+      {!isLoading ? (
+        <List.Section title="Create">
+          <List.Item
+            title="New Folder…"
+            subtitle={`Create inside ${currentPath}`}
+            icon={Icon.NewFolder}
+            keywords={["new", "folder", "mkdir", "create"]}
+            actions={
+              <ActionPanel>
+                <Action.Push
+                  title="New Folder…"
+                  icon={Icon.NewFolder}
+                  target={
+                    <TransferNewFolderForm
+                      dir={currentPath}
+                      onCreated={(full) => enter(full)}
+                    />
+                  }
+                />
+                {transferMenu(currentPath, null)}
+                <Action
+                  title="Cancel Transfer"
+                  icon={Icon.XMarkCircle}
+                  onAction={cancel}
+                />
+              </ActionPanel>
+            }
+          />
+        </List.Section>
+      ) : null}
       {visible.length === 0 && !isLoading ? (
         <List.EmptyView
           icon={Icon.Folder}
@@ -339,5 +371,56 @@ export function TransferTree(props: {
         />
       ) : null}
     </List>
+  );
+}
+
+function TransferNewFolderForm(props: {
+  dir: string;
+  onCreated: (fullPath: string) => void;
+}) {
+  const { pop } = useNavigation();
+  const [name, setName] = useState("Untitled Folder");
+  const [error, setError] = useState<string | undefined>();
+  return (
+    <Form
+      navigationTitle={`New folder in ${props.dir}`}
+      actions={
+        <ActionPanel>
+          <Action.SubmitForm
+            title="Create and Enter Folder"
+            onSubmit={async () => {
+              if (!name.trim()) {
+                setError("Name cannot be empty");
+                return;
+              }
+              const full = path.join(props.dir, name.trim());
+              try {
+                await fs.mkdir(full);
+                await showToast({
+                  style: Toast.Style.Success,
+                  title: "Folder created",
+                });
+                props.onCreated(full);
+                pop();
+              } catch (e) {
+                await showToast({
+                  style: Toast.Style.Failure,
+                  title: "Create failed",
+                  message: String(e),
+                });
+              }
+            }}
+          />
+        </ActionPanel>
+      }
+    >
+      <Form.TextField
+        id="name"
+        title="Folder name"
+        value={name}
+        error={error}
+        onChange={setName}
+      />
+    </Form>
   );
 }

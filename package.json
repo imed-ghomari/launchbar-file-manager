@@ -1,0 +1,63 @@
+{
+  "$schema": "https://www.raycast.com/schemas/extension.json",
+  "name": "launchbar-file-manager",
+  "title": "LaunchBar File Manager",
+  "description": "LaunchBar-style file browsing inside Raycast: drill with keyboard, preview, copy move rename trash.",
+  "icon": "icon.png",
+  "author": "you",
+  "license": "MIT",
+  "commands": [
+    {
+      "name": "browse-files",
+      "title": "Browse Files",
+      "description": "Browse filesystem LaunchBar-style with quick file operations",
+      "mode": "view"
+    },
+    {
+      "name": "finder-selection",
+      "title": "Act on Finder Selection",
+      "description": "Act on files currently selected in Finder (Instant Send style)",
+      "mode": "view"
+    }
+  ],
+  "preferences": [
+    {
+      "name": "startingPath",
+      "title": "Starting folder",
+      "description": "Folder to open when the command starts",
+      "type": "directory",
+      "required": false,
+      "default": "/Users/Apple"
+    },
+    {
+      "name": "showHiddenDefault",
+      "title": "View options",
+      "description": "Show hidden files by default",
+      "type": "checkbox",
+      "required": false,
+      "label": "Show hidden files",
+      "default": false
+    }
+  ],
+  "dependencies": {
+    "@raycast/api": "^2.7.3",
+    "@raycast/utils": "^2.3.2",
+    "trash": "^8.1.1"
+  },
+  "devDependencies": {
+    "@raycast/eslint-config": "^2.2.0",
+    "@types/node": "22.19.17",
+    "@types/react": "19.0.10",
+    "eslint": "^9.17.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.71.1"
+  },
+  "scripts": {
+    "build": "ray build",
+    "dev": "ray develop",
+    "lint": "ray lint",
+    "fix-lint": "ray lint --fix",
+    "publish": "npx @raycast/api@latest publish"
+  }
+}

@@ -132,6 +132,9 @@ function FileBrowser(props: {
   const [currentPath, setCurrentPath] = useState(props.initialPath);
   const [searchText, setSearchText] = useState("");
   // Highlight follows navigation: going up lands on the folder just left.
+  // Control is released as soon as the landing registers — otherwise every
+  // arrow key would re-render + re-center the list instead of scrolling
+  // natively (stable until the visible edge, then shift).
   const [highlightId, setHighlightId] = useState<string | undefined>(undefined);
   // Global basket: survives push/pop so the selection stays visible across
   // navigation. Copy/move happens only via Tab → transfer tree.
@@ -190,8 +193,11 @@ function FileBrowser(props: {
 
   function goUp() {
     if (currentPath === parentDir(currentPath)) return;
-    // Land the highlight on the folder we just came from.
+    // Land the highlight on the folder just left, then release control so
+    // arrows scroll natively. The timeout is a backstop in case the
+    // selection callback doesn't fire for the programmatic landing.
     setHighlightId(currentPath);
+    setTimeout(() => setHighlightId(undefined), 100);
     setSearchText("");
     setCurrentPath(parentDir(currentPath));
   }
@@ -260,7 +266,7 @@ function FileBrowser(props: {
       onSearchTextChange={setSearchText}
       filtering={true}
       selectedItemId={highlightId}
-      onSelectionChange={(id) => setHighlightId(id ?? undefined)}
+      onSelectionChange={() => setHighlightId(undefined)}
       isShowingDetail={props.showDetail && entries.length > 0}
     >
       {/* No List.Section: a section header would scroll away on long lists

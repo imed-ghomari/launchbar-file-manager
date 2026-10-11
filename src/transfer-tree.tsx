@@ -91,8 +91,11 @@ export function TransferTree(props: {
 
   function goUp() {
     if (currentPath === parentDir(currentPath)) return;
-    // Land the highlight on the folder just left.
+    // Land the highlight on the folder just left, then release control so
+    // arrows scroll natively. The timeout is a backstop in case the
+    // selection callback doesn't fire for the programmatic landing.
     setHighlightId(currentPath);
+    setTimeout(() => setHighlightId(undefined), 100);
     setSearchText("");
     setCurrentPath(parentDir(currentPath));
   }
@@ -206,7 +209,7 @@ export function TransferTree(props: {
       onSearchTextChange={setSearchText}
       filtering={false}
       selectedItemId={highlightId}
-      onSelectionChange={(id) => setHighlightId(id ?? undefined)}
+      onSelectionChange={() => setHighlightId(undefined)}
     >
       <List.Section
         title={`${sourceNames.slice(0, 3).join(", ")}${sourceNames.length > 3 ? ` +${sourceNames.length - 3} more` : ""}`}

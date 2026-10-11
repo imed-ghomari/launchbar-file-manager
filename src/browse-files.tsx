@@ -38,7 +38,8 @@ import {
   togglePath,
   useGlobalSelection,
 } from "./selection-store";
-import { copyManyWithProgress, moveManyWithProgress } from "./copy-progress";
+import { copyManyWithProgress } from "./copy-progress";
+import { DestinationPicker } from "./destination-picker";
 
 type Prefs = {
   startingPath?: string;
@@ -185,6 +186,20 @@ function FileBrowser(props: {
     );
   }
 
+  // LaunchBar-style: browse to the destination in the same UI, Enter confirms.
+  function pickDestination(mode: "copy" | "move", sources: string[]) {
+    if (sources.length === 0) return;
+    push(
+      <DestinationPicker
+        sources={sources}
+        mode={mode}
+        initialPath={currentPath}
+        showHidden={props.showHidden}
+        onDone={refresh}
+      />,
+    );
+  }
+
   const crumbs = currentPath.replace(/^\/Users\/[^/]+/, "~");
   const isRoot = currentPath === parentDir(currentPath);
 
@@ -228,33 +243,18 @@ function FileBrowser(props: {
                     })
                   }
                 />
-                <ActionPanel.Submenu
-                  title="Copy Selected to"
+                <Action
+                  title="Copy Selected to… (Browse)"
                   icon={Icon.Clipboard}
-                >
-                  {FAVORITES.map((f) => (
-                    <Action
-                      key={f.path}
-                      title={f.title}
-                      onAction={() =>
-                        copyPathsTo([...selected], f.path, () => refresh())
-                      }
-                    />
-                  ))}
-                </ActionPanel.Submenu>
-                <ActionPanel.Submenu title="Move Selected to" icon={Icon.Move}>
-                  {FAVORITES.map((f) => (
-                    <Action
-                      key={f.path}
-                      title={f.title}
-                      onAction={() =>
-                        movePathsTo([...selected], f.path, () => {
-                          refresh();
-                        })
-                      }
-                    />
-                  ))}
-                </ActionPanel.Submenu>
+                  shortcut={Keyboard.Shortcut.Common.Copy}
+                  onAction={() => pickDestination("copy", [...selected])}
+                />
+                <Action
+                  title="Move Selected to… (Browse)"
+                  icon={Icon.Move}
+                  shortcut={{ modifiers: ["cmd", "shift"], key: "m" }}
+                  onAction={() => pickDestination("move", [...selected])}
+                />
                 <Action.CopyToClipboard
                   title="Copy Selected Paths"
                   content={selected.join("\n")}
@@ -317,6 +317,7 @@ function FileBrowser(props: {
             onClearSelection={clearSelection}
             onEnterFolder={enterFolder}
             onJump={jumpTo}
+            onPickDestination={pickDestination}
             onChanged={refresh}
             onToggleHidden={props.onToggleHidden}
             onToggleDetail={props.onToggleDetail}
@@ -360,6 +361,7 @@ function FileRow(props: {
   onClearSelection: () => void;
   onEnterFolder: (p: string) => void;
   onJump: (p: string) => void;
+  onPickDestination: (mode: "copy" | "move", sources: string[]) => void;
   onChanged: () => void;
   onToggleHidden: () => void;
   onToggleDetail: () => void;
@@ -500,32 +502,18 @@ function FileRow(props: {
               shortcut={{ modifiers: ["cmd"], key: "d" }}
               onAction={() => duplicateEntry(entry, onChanged)}
             />
-            <ActionPanel.Submenu
-              title="Copy to…"
+            <Action
+              title="Copy to… (Browse)"
               icon={Icon.Clipboard}
               shortcut={Keyboard.Shortcut.Common.Copy}
-            >
-              {FAVORITES.map((f) => (
-                <Action
-                  key={f.path}
-                  title={f.title}
-                  onAction={() => copyToDir(entry, f.path, onChanged)}
-                />
-              ))}
-            </ActionPanel.Submenu>
-            <ActionPanel.Submenu
-              title="Move to…"
+              onAction={() => props.onPickDestination("copy", [entry.fullPath])}
+            />
+            <Action
+              title="Move to… (Browse)"
               icon={Icon.Move}
               shortcut={{ modifiers: ["cmd", "shift"], key: "m" }}
-            >
-              {FAVORITES.map((f) => (
-                <Action
-                  key={f.path}
-                  title={f.title}
-                  onAction={() => moveToDir(entry, f.path, onChanged)}
-                />
-              ))}
-            </ActionPanel.Submenu>
+              onAction={() => props.onPickDestination("move", [entry.fullPath])}
+            />
             <Action
               title="Move to Trash"
               icon={Icon.Trash}
@@ -847,75 +835,6 @@ async function duplicateEntry(entry: FileEntry, onChanged: () => void) {
   }
 }
 
-async function copyToDir(
-  entry: FileEntry,
-  destDir: string,
-  onChanged: () => void,
-) {
-  const toast = await showToast({
-    style: Toast.Style.Animated,
-    title: `Copying to ${destDir}…`,
-    message: entry.name,
-  });
-  try {
-    const r = await copyManyWithProgress(
-      [entry.fullPath],
-      destDir,
-      toast,
-      "Copying",
-    );
-    if (r.errors.length > 0) {
-      toast.style = Toast.Style.Failure;
-      toast.title = "Copy had errors";
-      toast.message = r.errors.slice(0, 3).join("\n");
-    } else {
-      toast.style = Toast.Style.Success;
-      toast.title = "Copied";
-      toast.message = `${entry.name} → ${destDir}`;
-    }
-    onChanged();
-  } catch (e) {
-    toast.style = Toast.Style.Failure;
-    toast.title = "Copy failed";
-    toast.message = String(e);
-  }
-}
-
-async function moveToDir(
-  entry: FileEntry,
-  destDir: string,
-  onChanged: () => void,
-) {
-  const toast = await showToast({
-    style: Toast.Style.Animated,
-    title: `Moving to ${destDir}…`,
-    message: entry.name,
-  });
-  try {
-    const r = await moveManyWithProgress(
-      [entry.fullPath],
-      destDir,
-      toast,
-      "Moving",
-    );
-    if (r.errors.length > 0) {
-      toast.style = Toast.Style.Failure;
-      toast.title = "Move had errors";
-      toast.message = r.errors.slice(0, 3).join("\n");
-    } else {
-      toast.style = Toast.Style.Success;
-      toast.title = "Moved";
-      toast.message = `${entry.name} → ${destDir}`;
-    }
-    removePaths([entry.fullPath]);
-    onChanged();
-  } catch (e) {
-    toast.style = Toast.Style.Failure;
-    toast.title = "Move failed";
-    toast.message = String(e);
-  }
-}
-
 async function moveToTrash(entry: FileEntry, onChanged: () => void) {
   const ok = await confirmAlert({
     title: `Move "${entry.name}" to Trash?`,
@@ -967,67 +886,5 @@ async function trashPaths(fullPaths: string[], onDone: () => void) {
       title: "Trash failed",
       message: String(e),
     });
-  }
-}
-
-async function copyPathsTo(
-  fullPaths: string[],
-  destDir: string,
-  onDone: () => void,
-) {
-  if (fullPaths.length === 0) return;
-  const toast = await showToast({
-    style: Toast.Style.Animated,
-    title: `Copying ${fullPaths.length} items…`,
-    message: `→ ${destDir}`,
-  });
-  try {
-    const r = await copyManyWithProgress(fullPaths, destDir, toast, "Copying");
-    if (r.errors.length > 0) {
-      toast.style = Toast.Style.Failure;
-      toast.title = `Copied with ${r.errors.length} errors`;
-      toast.message = r.errors.slice(0, 3).join("\n");
-    } else {
-      toast.style = Toast.Style.Success;
-      toast.title = `Copied ${r.copied} item${r.copied === 1 ? "" : "s"}`;
-      toast.message = `→ ${destDir}`;
-    }
-    // Keep selection after copy (sources still exist) — user clears manually.
-    onDone();
-  } catch (e) {
-    toast.style = Toast.Style.Failure;
-    toast.title = "Copy failed";
-    toast.message = String(e);
-  }
-}
-
-async function movePathsTo(
-  fullPaths: string[],
-  destDir: string,
-  onDone: () => void,
-) {
-  if (fullPaths.length === 0) return;
-  const toast = await showToast({
-    style: Toast.Style.Animated,
-    title: `Moving ${fullPaths.length} items…`,
-    message: `→ ${destDir}`,
-  });
-  try {
-    const r = await moveManyWithProgress(fullPaths, destDir, toast, "Moving");
-    if (r.errors.length > 0) {
-      toast.style = Toast.Style.Failure;
-      toast.title = `Moved with ${r.errors.length} errors`;
-      toast.message = r.errors.slice(0, 3).join("\n");
-    } else {
-      toast.style = Toast.Style.Success;
-      toast.title = `Moved ${r.moved} item${r.moved === 1 ? "" : "s"}`;
-      toast.message = `→ ${destDir}`;
-    }
-    removePaths(fullPaths);
-    onDone();
-  } catch (e) {
-    toast.style = Toast.Style.Failure;
-    toast.title = "Move failed";
-    toast.message = String(e);
   }
 }

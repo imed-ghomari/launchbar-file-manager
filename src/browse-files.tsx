@@ -418,7 +418,11 @@ function FileRow(props: {
               <Action
                 title="Open Folder"
                 icon={Icon.ArrowRight}
-                shortcut={{ modifiers: [], key: "space" }}
+                shortcut={
+                  props.searchActive
+                    ? undefined
+                    : { modifiers: [], key: "space" }
+                }
                 onAction={() => onEnterFolder(entry.fullPath)}
               />
               <Action
@@ -436,7 +440,11 @@ function FileRow(props: {
                 onAction={() => open(entry.fullPath)}
               />
               <Action.ToggleQuickLook
-                shortcut={{ modifiers: [], key: "space" }}
+                shortcut={
+                  props.searchActive
+                    ? undefined
+                    : { modifiers: [], key: "space" }
+                }
               />
             </>
           )}
@@ -475,7 +483,9 @@ function FileRow(props: {
             <Action
               title={props.isSelected ? "Deselect" : "Select"}
               icon={props.isSelected ? Icon.XMarkCircle : Icon.CheckCircle}
-              shortcut={{ modifiers: [], key: "x" }}
+              shortcut={
+                props.searchActive ? undefined : { modifiers: [], key: "x" }
+              }
               onAction={props.onToggleSelect}
             />
             <Action

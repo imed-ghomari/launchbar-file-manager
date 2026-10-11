@@ -33,13 +33,14 @@ import {
 } from "./fs-utils";
 import {
   addPaths,
-  clearSelection as clearGlobalSelection,
+  clearAll,
+  ensurePath,
   removePaths,
+  setOperation,
   togglePath,
   useGlobalSelection,
 } from "./selection-store";
-import { copyManyWithProgress } from "./copy-progress";
-import { DestinationPicker } from "./destination-picker";
+import { copyManyWithProgress, moveManyWithProgress } from "./copy-progress";
 
 type Prefs = {
   startingPath?: string;
@@ -76,6 +77,11 @@ function matchesFilter(name: string, query: string): boolean {
   return name.toLowerCase().includes(q);
 }
 
+function isInside(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel !== "" && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
 function FileBrowser(props: {
   initialPath: string;
   showHidden: boolean;
@@ -86,8 +92,9 @@ function FileBrowser(props: {
   const { push, pop } = useNavigation();
   const [currentPath] = useState(props.initialPath);
   const [searchText, setSearchText] = useState("");
-  // Global basket: survives push/pop so selection stays visible up the hierarchy.
-  const { selected, toggle, add, clear } = useGlobalSelection();
+  // Global basket + pending copy/move op: survives push/pop so the selection
+  // stays visible up the hierarchy, and the main browser IS the destination.
+  const { selected, operation } = useGlobalSelection();
 
   const { data, isLoading, revalidate } = usePromise(
     async (dir: string, hidden: boolean) => {
@@ -107,10 +114,6 @@ function FileBrowser(props: {
 
   const entries = useMemo(() => data ?? [], [data]);
   const selectedSet = useMemo(() => new Set(selected), [selected]);
-  const selectedEntries = useMemo(
-    () => entries.filter((e) => selectedSet.has(e.fullPath)),
-    [entries, selectedSet],
-  );
   const filteredEntries = useMemo(
     () => entries.filter((e) => matchesFilter(e.name, searchText)),
     [entries, searchText],
@@ -118,12 +121,10 @@ function FileBrowser(props: {
 
   function toggleSelect(fullPath: string) {
     togglePath(fullPath);
-    void toggle;
   }
 
   function selectAll() {
     addPaths(entries.map((e) => e.fullPath));
-    void add;
   }
 
   function selectFiltered() {
@@ -131,8 +132,17 @@ function FileBrowser(props: {
   }
 
   function clearSelection() {
-    clearGlobalSelection();
-    void clear;
+    clearAll();
+  }
+
+  function markForCopy(fullPath?: string) {
+    if (fullPath) ensurePath(fullPath);
+    setOperation("copy");
+  }
+
+  function markForMove(fullPath?: string) {
+    if (fullPath) ensurePath(fullPath);
+    setOperation("move");
   }
 
   async function pruneMissing() {
@@ -186,18 +196,78 @@ function FileBrowser(props: {
     );
   }
 
-  // LaunchBar-style: browse to the destination in the same UI, Enter confirms.
-  function pickDestination(mode: "copy" | "move", sources: string[]) {
+  // The main browser IS the destination: paste the global basket into the
+  // current folder. Guards against copying a folder into itself/descendant
+  // and against moving onto the same folder.
+  async function executePaste(mode: "copy" | "move") {
+    const sources = [...selected];
     if (sources.length === 0) return;
-    push(
-      <DestinationPicker
-        sources={sources}
-        mode={mode}
-        initialPath={currentPath}
-        showHidden={props.showHidden}
-        onDone={refresh}
-      />,
-    );
+    for (const src of sources) {
+      if (src === currentPath || isInside(currentPath, src)) {
+        await showToast({
+          style: Toast.Style.Failure,
+          title: `Cannot ${mode} a folder into itself`,
+          message: src,
+        });
+        return;
+      }
+      if (path.dirname(src) === currentPath && mode === "move") {
+        await showToast({
+          style: Toast.Style.Failure,
+          title: "Already in this folder",
+          message: currentPath,
+        });
+        return;
+      }
+    }
+    const verb = mode === "copy" ? "Copying" : "Moving";
+    const toast = await showToast({
+      style: Toast.Style.Animated,
+      title: `${verb} ${sources.length} item${sources.length === 1 ? "" : "s"}…`,
+      message: `→ ${currentPath}`,
+    });
+    try {
+      if (mode === "copy") {
+        const r = await copyManyWithProgress(
+          sources,
+          currentPath,
+          toast,
+          "Copying",
+        );
+        if (r.errors.length > 0) {
+          toast.style = Toast.Style.Failure;
+          toast.title = `Copied with ${r.errors.length} errors`;
+          toast.message = r.errors.slice(0, 3).join("\n");
+        } else {
+          toast.style = Toast.Style.Success;
+          toast.title = `Copied ${r.copied} item${r.copied === 1 ? "" : "s"}`;
+          toast.message = `→ ${currentPath}`;
+        }
+      } else {
+        const r = await moveManyWithProgress(
+          sources,
+          currentPath,
+          toast,
+          "Moving",
+        );
+        if (r.errors.length > 0) {
+          toast.style = Toast.Style.Failure;
+          toast.title = `Moved with ${r.errors.length} errors`;
+          toast.message = r.errors.slice(0, 3).join("\n");
+        } else {
+          toast.style = Toast.Style.Success;
+          toast.title = `Moved ${r.moved} item${r.moved === 1 ? "" : "s"}`;
+          toast.message = `→ ${currentPath}`;
+        }
+        removePaths(sources);
+      }
+      clearAll();
+      refresh();
+    } catch (e) {
+      toast.style = Toast.Style.Failure;
+      toast.title = `${mode === "copy" ? "Copy" : "Move"} failed`;
+      toast.message = String(e);
+    }
   }
 
   const crumbs = currentPath.replace(/^\/Users\/[^/]+/, "~");
@@ -207,7 +277,11 @@ function FileBrowser(props: {
     <List
       isLoading={isLoading}
       navigationTitle={crumbs}
-      searchBarPlaceholder={`Filter + ↑↓, X select, → enter, ← back (${selected.length} selected)`}
+      searchBarPlaceholder={
+        operation
+          ? `Paste (${operation}) ${selected.length} items — navigate, Enter on Paste row (${selected.length} selected)`
+          : `Filter + ↑↓, X select, → enter, ← back, Space open/preview (${selected.length} selected)`
+      }
       searchText={searchText}
       onSearchTextChange={setSearchText}
       filtering={true}
@@ -222,61 +296,135 @@ function FileBrowser(props: {
         }
       >
         {selected.length > 0 ? (
-          <List.Item
-            title={`${selected.length} Selected`}
-            subtitle={
-              selectedEntries.length === selected.length
-                ? "Batch actions — trash, copy, move (stays until cleared)"
-                : `${selectedEntries.length} in this folder · ${selected.length} total — stays until cleared`
-            }
-            icon={{ source: Icon.CheckCircle, tintColor: Color.Green }}
-            keywords={["selection", "selected", "batch"]}
-            actions={
-              <ActionPanel>
-                <Action
-                  title="Trash Selected"
-                  icon={Icon.Trash}
-                  style={Action.Style.Destructive}
-                  onAction={() =>
-                    trashPaths([...selected], () => {
-                      refresh();
-                    })
-                  }
-                />
-                <Action
-                  title="Copy Selected to… (Browse)"
-                  icon={Icon.Clipboard}
-                  shortcut={Keyboard.Shortcut.Common.Copy}
-                  onAction={() => pickDestination("copy", [...selected])}
-                />
-                <Action
-                  title="Move Selected to… (Browse)"
-                  icon={Icon.Move}
-                  shortcut={{ modifiers: ["cmd", "shift"], key: "m" }}
-                  onAction={() => pickDestination("move", [...selected])}
-                />
-                <Action.CopyToClipboard
-                  title="Copy Selected Paths"
-                  content={selected.join("\n")}
-                  onCopy={() => Clipboard.copy(selected.join("\n"))}
-                />
-                <Action
-                  title="Clear Selection"
-                  icon={Icon.XMarkCircle}
-                  shortcut={{ modifiers: ["cmd", "shift"], key: "x" }}
-                  onAction={clearSelection}
-                />
-                {!isRoot ? (
+          operation ? (
+            <List.Item
+              title={`Paste (${operation === "copy" ? "Copy" : "Move"}) ${selected.length} item${selected.length === 1 ? "" : "s"} Here`}
+              subtitle={`${currentPath} — Enter pastes, ← navigates`}
+              icon={{ source: Icon.ArrowRight, tintColor: Color.Green }}
+              keywords={["paste", "here", "copy", "move", currentPath]}
+              actions={
+                <ActionPanel>
                   <Action
-                    title="Go Back"
-                    icon={Icon.ArrowLeft}
-                    shortcut={{ modifiers: [], key: "arrowLeft" }}
-                    onAction={() => pop()}
+                    title={`Paste Here (${operation === "copy" ? "Copy" : "Move"})`}
+                    icon={Icon.ArrowRight}
+                    onAction={() => executePaste(operation)}
                   />
-                ) : null}
-              </ActionPanel>
-            }
-          />
+                  <Action
+                    title={`Switch to ${operation === "copy" ? "Move" : "Copy"}`}
+                    icon={Icon.Repeat}
+                    onAction={() =>
+                      setOperation(operation === "copy" ? "move" : "copy")
+                    }
+                  />
+                  <Action
+                    title="Cancel Paste"
+                    icon={Icon.XMarkCircle}
+                    onAction={() => clearAll()}
+                  />
+                  <ActionPanel.Section title="Selection">
+                    <Action
+                      title="Trash Selected"
+                      icon={Icon.Trash}
+                      style={Action.Style.Destructive}
+                      onAction={() =>
+                        trashPaths([...selected], () => refresh())
+                      }
+                    />
+                    <Action.CopyToClipboard
+                      title="Copy Selected Paths"
+                      content={selected.join("\n")}
+                      onCopy={() => Clipboard.copy(selected.join("\n"))}
+                    />
+                    <Action
+                      title="Clear Selection"
+                      icon={Icon.XMarkCircle}
+                      shortcut={{ modifiers: ["cmd", "shift"], key: "x" }}
+                      onAction={clearSelection}
+                    />
+                  </ActionPanel.Section>
+                  {!isRoot ? (
+                    <Action
+                      title="Go Back"
+                      icon={Icon.ArrowLeft}
+                      shortcut={{ modifiers: [], key: "arrowLeft" }}
+                      onAction={() => pop()}
+                    />
+                  ) : null}
+                </ActionPanel>
+              }
+            />
+          ) : (
+            <List.Item
+              title={`${selected.length} Selected — Copy or Move?`}
+              subtitle="Choose an operation first, then Enter pastes here"
+              icon={{ source: Icon.CheckCircle, tintColor: Color.Green }}
+              keywords={[
+                "selection",
+                "selected",
+                "batch",
+                "paste",
+                "copy",
+                "move",
+              ]}
+              actions={
+                <ActionPanel>
+                  <ActionPanel.Submenu title="Paste Selected Here…">
+                    <Action
+                      title="Copy Here"
+                      icon={Icon.Clipboard}
+                      onAction={() => executePaste("copy")}
+                    />
+                    <Action
+                      title="Move Here"
+                      icon={Icon.Move}
+                      onAction={() => executePaste("move")}
+                    />
+                  </ActionPanel.Submenu>
+                  <Action
+                    title="Mark for Copy"
+                    icon={Icon.Clipboard}
+                    shortcut={Keyboard.Shortcut.Common.Copy}
+                    onAction={() => markForCopy()}
+                  />
+                  <Action
+                    title="Mark for Move"
+                    icon={Icon.Move}
+                    shortcut={{ modifiers: ["cmd", "shift"], key: "m" }}
+                    onAction={() => markForMove()}
+                  />
+                  <ActionPanel.Section title="Selection">
+                    <Action
+                      title="Trash Selected"
+                      icon={Icon.Trash}
+                      style={Action.Style.Destructive}
+                      onAction={() =>
+                        trashPaths([...selected], () => refresh())
+                      }
+                    />
+                    <Action.CopyToClipboard
+                      title="Copy Selected Paths"
+                      content={selected.join("\n")}
+                      onCopy={() => Clipboard.copy(selected.join("\n"))}
+                    />
+                    <Action
+                      title="Clear Selection"
+                      icon={Icon.XMarkCircle}
+                      shortcut={{ modifiers: ["cmd", "shift"], key: "x" }}
+                      onAction={clearSelection}
+                    />
+                  </ActionPanel.Section>
+                  {!isRoot ? (
+                    <Action
+                      title="Go Back"
+                      icon={Icon.ArrowLeft}
+                      shortcut={{ modifiers: [], key: "arrowLeft" }}
+                      onAction={() => pop()}
+                    />
+                  ) : null}
+                </ActionPanel>
+              }
+            />
+          )
         ) : null}
         {!isRoot ? (
           <List.Item
@@ -310,6 +458,7 @@ function FileBrowser(props: {
             showDetail={props.showDetail}
             isSelected={selectedSet.has(entry.fullPath)}
             selectedCount={selected.length}
+            pendingOp={operation}
             searchActive={searchText.trim().length > 0}
             onToggleSelect={() => toggleSelect(entry.fullPath)}
             onSelectAll={selectAll}
@@ -317,7 +466,9 @@ function FileBrowser(props: {
             onClearSelection={clearSelection}
             onEnterFolder={enterFolder}
             onJump={jumpTo}
-            onPickDestination={pickDestination}
+            onMarkCopy={() => markForCopy(entry.fullPath)}
+            onMarkMove={() => markForMove(entry.fullPath)}
+            onPasteHere={(mode) => executePaste(mode)}
             onChanged={refresh}
             onToggleHidden={props.onToggleHidden}
             onToggleDetail={props.onToggleDetail}
@@ -329,9 +480,35 @@ function FileBrowser(props: {
         <List.EmptyView
           icon={Icon.Folder}
           title="Empty folder"
-          description="Press ← to go back"
+          description={
+            selected.length > 0
+              ? "Paste your selection here, or press ← to go back"
+              : "Press ← to go back"
+          }
           actions={
             <ActionPanel>
+              {selected.length > 0 ? (
+                operation ? (
+                  <Action
+                    title={`Paste Here (${operation === "copy" ? "Copy" : "Move"})`}
+                    icon={Icon.ArrowRight}
+                    onAction={() => executePaste(operation)}
+                  />
+                ) : (
+                  <ActionPanel.Submenu title="Paste Selected Here…">
+                    <Action
+                      title="Copy Here"
+                      icon={Icon.Clipboard}
+                      onAction={() => executePaste("copy")}
+                    />
+                    <Action
+                      title="Move Here"
+                      icon={Icon.Move}
+                      onAction={() => executePaste("move")}
+                    />
+                  </ActionPanel.Submenu>
+                )
+              ) : null}
               {!isRoot ? (
                 <Action
                   title="Go Back"
@@ -354,6 +531,7 @@ function FileRow(props: {
   showDetail: boolean;
   isSelected: boolean;
   selectedCount: number;
+  pendingOp: "copy" | "move" | null;
   searchActive: boolean;
   onToggleSelect: () => void;
   onSelectAll: () => void;
@@ -361,7 +539,9 @@ function FileRow(props: {
   onClearSelection: () => void;
   onEnterFolder: (p: string) => void;
   onJump: (p: string) => void;
-  onPickDestination: (mode: "copy" | "move", sources: string[]) => void;
+  onMarkCopy: () => void;
+  onMarkMove: () => void;
+  onPasteHere: (mode: "copy" | "move") => void;
   onChanged: () => void;
   onToggleHidden: () => void;
   onToggleDetail: () => void;
@@ -423,18 +603,31 @@ function FileRow(props: {
       actions={
         <ActionPanel>
           {entry.isDirectory ? (
-            <Action
-              title="Open Folder"
-              icon={Icon.ArrowRight}
-              shortcut={{ modifiers: [], key: "arrowRight" }}
-              onAction={() => onEnterFolder(entry.fullPath)}
-            />
+            <>
+              <Action
+                title="Open Folder"
+                icon={Icon.ArrowRight}
+                shortcut={{ modifiers: [], key: "space" }}
+                onAction={() => onEnterFolder(entry.fullPath)}
+              />
+              <Action
+                title="Open Folder"
+                icon={Icon.ArrowRight}
+                shortcut={{ modifiers: [], key: "arrowRight" }}
+                onAction={() => onEnterFolder(entry.fullPath)}
+              />
+            </>
           ) : (
-            <Action
-              title="Open File"
-              icon={Icon.Document}
-              onAction={() => open(entry.fullPath)}
-            />
+            <>
+              <Action
+                title="Open File"
+                icon={Icon.Document}
+                onAction={() => open(entry.fullPath)}
+              />
+              <Action.ToggleQuickLook
+                shortcut={{ modifiers: [], key: "space" }}
+              />
+            </>
           )}
           {/* FIX 1 — back navigation on EVERY row so ← always works */}
           <Action
@@ -455,7 +648,6 @@ function FileRow(props: {
             shortcut={Keyboard.Shortcut.Common.Open}
             onAction={() => showInFinder(entry.fullPath)}
           />
-          <Action.ToggleQuickLook />
 
           {/* FIX 2 — multi-select: filter, ↑↓ to highlight, X to select */}
           <ActionPanel.Section title="Select">
@@ -465,6 +657,42 @@ function FileRow(props: {
               shortcut={{ modifiers: [], key: "x" }}
               onAction={props.onToggleSelect}
             />
+            <Action
+              title="Mark for Copy"
+              icon={Icon.Clipboard}
+              shortcut={Keyboard.Shortcut.Common.Copy}
+              onAction={props.onMarkCopy}
+            />
+            <Action
+              title="Mark for Move"
+              icon={Icon.Move}
+              shortcut={{ modifiers: ["cmd", "shift"], key: "m" }}
+              onAction={props.onMarkMove}
+            />
+            {props.selectedCount > 0 ? (
+              props.pendingOp ? (
+                <Action
+                  title={`Paste Here (${props.pendingOp === "copy" ? "Copy" : "Move"})`}
+                  icon={Icon.ArrowRight}
+                  onAction={() =>
+                    props.onPasteHere(props.pendingOp as "copy" | "move")
+                  }
+                />
+              ) : (
+                <ActionPanel.Submenu title="Paste Selected Here…">
+                  <Action
+                    title="Copy Here"
+                    icon={Icon.Clipboard}
+                    onAction={() => props.onPasteHere("copy")}
+                  />
+                  <Action
+                    title="Move Here"
+                    icon={Icon.Move}
+                    onAction={() => props.onPasteHere("move")}
+                  />
+                </ActionPanel.Submenu>
+              )
+            ) : null}
             <Action
               title="Select All in Folder"
               icon={Icon.CheckRosette}
@@ -501,18 +729,6 @@ function FileRow(props: {
               icon={Icon.CopyClipboard}
               shortcut={{ modifiers: ["cmd"], key: "d" }}
               onAction={() => duplicateEntry(entry, onChanged)}
-            />
-            <Action
-              title="Copy to… (Browse)"
-              icon={Icon.Clipboard}
-              shortcut={Keyboard.Shortcut.Common.Copy}
-              onAction={() => props.onPickDestination("copy", [entry.fullPath])}
-            />
-            <Action
-              title="Move to… (Browse)"
-              icon={Icon.Move}
-              shortcut={{ modifiers: ["cmd", "shift"], key: "m" }}
-              onAction={() => props.onPickDestination("move", [entry.fullPath])}
             />
             <Action
               title="Move to Trash"
@@ -643,10 +859,12 @@ function detailMarkdown(entry: FileEntry, isSelected: boolean): string {
   if (entry.isDirectory) {
     lines.push(
       "",
-      "Press → or Enter to drill in, ← to go back — like LaunchBar.",
+      "Space or → enters, ← goes back. X selects, ⌘⇧C marks copy, ⌘⇧M marks move.",
     );
   } else if (entry.extension === ".md" || entry.extension === ".txt") {
-    lines.push("", "_Press Space for Quick Look, Enter to open._");
+    lines.push("", "_Space previews (Quick Look), Enter opens._");
+  } else {
+    lines.push("", "_Space previews (Quick Look), Enter opens._");
   }
   lines.push("", `\`${entry.fullPath}\``);
   return lines.join("\n");

@@ -8,6 +8,7 @@ import {
   Toast,
   showToast,
   useNavigation,
+  Keyboard,
 } from "@raycast/api";
 import { usePromise } from "@raycast/utils";
 import { promises as fs } from "node:fs";
@@ -255,6 +256,12 @@ export function TransferTree(props: {
                   <Action
                     title="Enter Folder"
                     icon={Icon.ArrowRight}
+                    shortcut={{ modifiers: [], key: "space" }}
+                    onAction={() => enter(entry.fullPath)}
+                  />
+                  <Action
+                    title="Enter Folder"
+                    icon={Icon.ArrowRight}
                     shortcut={{ modifiers: [], key: "arrowRight" }}
                     onAction={() => enter(entry.fullPath)}
                   />
@@ -264,8 +271,16 @@ export function TransferTree(props: {
                     shortcut={{ modifiers: [], key: "arrowLeft" }}
                     onAction={goUp}
                   />
-                  <Action.ToggleQuickLook
-                    shortcut={{ modifiers: [], key: "space" }}
+                  <Action.Push
+                    title="New Folder…"
+                    icon={Icon.NewFolder}
+                    shortcut={Keyboard.Shortcut.Common.New}
+                    target={
+                      <TransferNewFolderForm
+                        dir={currentPath}
+                        onCreated={(full) => enter(full)}
+                      />
+                    }
                   />
                   <Action
                     title="Cancel Transfer"
@@ -306,6 +321,17 @@ export function TransferTree(props: {
                   <Action.ToggleQuickLook
                     shortcut={{ modifiers: [], key: "space" }}
                   />
+                  <Action.Push
+                    title="New Folder…"
+                    icon={Icon.NewFolder}
+                    shortcut={Keyboard.Shortcut.Common.New}
+                    target={
+                      <TransferNewFolderForm
+                        dir={currentPath}
+                        onCreated={(full) => enter(full)}
+                      />
+                    }
+                  />
                   <Action
                     title="Cancel Transfer"
                     icon={Icon.XMarkCircle}
@@ -317,36 +343,6 @@ export function TransferTree(props: {
           ),
         )}
       </List.Section>
-      {!isLoading ? (
-        <List.Section title="Create">
-          <List.Item
-            title="New Folder…"
-            subtitle={`Create inside ${currentPath}`}
-            icon={Icon.NewFolder}
-            keywords={["new", "folder", "mkdir", "create"]}
-            actions={
-              <ActionPanel>
-                <Action.Push
-                  title="New Folder…"
-                  icon={Icon.NewFolder}
-                  target={
-                    <TransferNewFolderForm
-                      dir={currentPath}
-                      onCreated={(full) => enter(full)}
-                    />
-                  }
-                />
-                {transferMenu(currentPath, null)}
-                <Action
-                  title="Cancel Transfer"
-                  icon={Icon.XMarkCircle}
-                  onAction={cancel}
-                />
-              </ActionPanel>
-            }
-          />
-        </List.Section>
-      ) : null}
       {visible.length === 0 && !isLoading ? (
         <List.EmptyView
           icon={Icon.Folder}
@@ -360,6 +356,17 @@ export function TransferTree(props: {
                 icon={Icon.ArrowLeft}
                 shortcut={{ modifiers: [], key: "arrowLeft" }}
                 onAction={goUp}
+              />
+              <Action.Push
+                title="New Folder…"
+                icon={Icon.NewFolder}
+                shortcut={Keyboard.Shortcut.Common.New}
+                target={
+                  <TransferNewFolderForm
+                    dir={currentPath}
+                    onCreated={(full) => enter(full)}
+                  />
+                }
               />
               <Action
                 title="Cancel Transfer"

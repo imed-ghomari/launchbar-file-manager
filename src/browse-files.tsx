@@ -302,6 +302,10 @@ function FileBrowser(props: {
               subtitle={`${currentPath} — Enter pastes, ← navigates`}
               icon={{ source: Icon.ArrowRight, tintColor: Color.Green }}
               keywords={["paste", "here", "copy", "move", currentPath]}
+              quickLook={{
+                path: currentPath,
+                name: path.basename(currentPath) || currentPath,
+              }}
               actions={
                 <ActionPanel>
                   <Action
@@ -366,6 +370,10 @@ function FileBrowser(props: {
                 "copy",
                 "move",
               ]}
+              quickLook={{
+                path: currentPath,
+                name: path.basename(currentPath) || currentPath,
+              }}
               actions={
                 <ActionPanel>
                   <ActionPanel.Submenu title="Paste Selected Here…">
@@ -432,6 +440,10 @@ function FileBrowser(props: {
             subtitle="Parent folder (←)"
             icon={Icon.ArrowUp}
             keywords={["up", "back", "parent"]}
+            quickLook={{
+              path: parentDir(currentPath),
+              name: path.basename(parentDir(currentPath)) || "/",
+            }}
             actions={
               <ActionPanel>
                 <Action

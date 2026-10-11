@@ -11,7 +11,9 @@ type ExtensionPreferences = {
   /** Starting folder - Folder to open when the command starts */
   "startingPath": string,
   /** View options - Show hidden files by default */
-  "showHiddenDefault": boolean
+  "showHiddenDefault": boolean,
+  /** Transfer start folder - Where the Tab transfer tree starts browsing */
+  "transferStart": "home" | "current"
 }
 
 /** Preferences accessible in all the extension's commands */

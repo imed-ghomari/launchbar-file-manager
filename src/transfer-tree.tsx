@@ -34,7 +34,7 @@ function isInside(child: string, parent: string): boolean {
 /**
  * The ONE copy/move flow (LaunchBar-style).
  *
- * Opened with Tab from the main browser. Shows the file tree from home:
+ * Opened with Tab from the main browser. Shows the file tree (start folder per setting):
  * navigate with ←/→ only — Enter never enters folders here. Enter triggers
  * the transfer for the CURRENT folder, then forces a Copy vs Move choice.
  * Esc pops back to the browser and clears the selection (deselect).
@@ -50,6 +50,7 @@ export function TransferTree(props: {
   const { sources } = props;
   const [currentPath, setCurrentPath] = useState(props.initialPath);
   const [searchText, setSearchText] = useState("");
+  const [highlightId, setHighlightId] = useState<string | undefined>(undefined);
 
   // Esc out of transfer = deselect + back to the normal tree.
   useEffect(() => () => clearAll(), []);
@@ -84,11 +85,14 @@ export function TransferTree(props: {
 
   function enter(dir: string) {
     setSearchText("");
+    setHighlightId(undefined);
     setCurrentPath(dir);
   }
 
   function goUp() {
     if (currentPath === parentDir(currentPath)) return;
+    // Land the highlight on the folder just left.
+    setHighlightId(currentPath);
     setSearchText("");
     setCurrentPath(parentDir(currentPath));
   }
@@ -97,6 +101,7 @@ export function TransferTree(props: {
     const resolved = expandHome(target);
     if (resolved === currentPath) return;
     setSearchText("");
+    setHighlightId(undefined);
     setCurrentPath(resolved);
   }
 
@@ -200,6 +205,8 @@ export function TransferTree(props: {
       searchText={searchText}
       onSearchTextChange={setSearchText}
       filtering={false}
+      selectedItemId={highlightId}
+      onSelectionChange={(id) => setHighlightId(id ?? undefined)}
     >
       <List.Section
         title={`${sourceNames.slice(0, 3).join(", ")}${sourceNames.length > 3 ? ` +${sourceNames.length - 3} more` : ""}`}
@@ -209,6 +216,7 @@ export function TransferTree(props: {
           entry.isDirectory ? (
             <List.Item
               key={entry.fullPath}
+              id={entry.fullPath}
               title={entry.name}
               icon={Icon.Folder}
               keywords={[entry.name]}
@@ -252,6 +260,7 @@ export function TransferTree(props: {
           ) : (
             <List.Item
               key={entry.fullPath}
+              id={entry.fullPath}
               title={entry.name}
               subtitle={formatSize(entry.size, false)}
               icon={Icon.Document}
@@ -260,6 +269,12 @@ export function TransferTree(props: {
               actions={
                 <ActionPanel>
                   {transferMenu(currentPath, null)}
+                  <Action
+                    title="Go up"
+                    icon={Icon.ArrowLeft}
+                    shortcut={{ modifiers: [], key: "arrowLeft" }}
+                    onAction={goUp}
+                  />
                   <Action.ToggleQuickLook
                     shortcut={{ modifiers: [], key: "space" }}
                   />
@@ -274,6 +289,29 @@ export function TransferTree(props: {
           ),
         )}
       </List.Section>
+      {visible.length === 0 && !isLoading ? (
+        <List.EmptyView
+          icon={Icon.Folder}
+          title="Empty folder"
+          description="Enter transfers into this folder, ← goes up"
+          actions={
+            <ActionPanel>
+              {transferMenu(currentPath, null)}
+              <Action
+                title="Go up"
+                icon={Icon.ArrowLeft}
+                shortcut={{ modifiers: [], key: "arrowLeft" }}
+                onAction={goUp}
+              />
+              <Action
+                title="Cancel Transfer"
+                icon={Icon.XMarkCircle}
+                onAction={cancel}
+              />
+            </ActionPanel>
+          }
+        />
+      ) : null}
     </List>
   );
 }

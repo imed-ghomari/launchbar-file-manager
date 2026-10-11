@@ -139,6 +139,8 @@ function FileBrowser(props: {
   const { push } = useNavigation();
   const [currentPath, setCurrentPath] = useState(props.initialPath);
   const [searchText, setSearchText] = useState("");
+  // Highlight follows navigation: going up lands on the folder just left.
+  const [highlightId, setHighlightId] = useState<string | undefined>(undefined);
   // Global basket: survives push/pop so the selection stays visible across
   // navigation. Copy/move happens only via Tab → transfer tree.
   const { selected } = useGlobalSelection();
@@ -193,11 +195,14 @@ function FileBrowser(props: {
 
   function enterFolder(folderPath: string) {
     setSearchText("");
+    setHighlightId(undefined);
     setCurrentPath(folderPath);
   }
 
   function goUp() {
     if (currentPath === parentDir(currentPath)) return;
+    // Land the highlight on the folder we just came from.
+    setHighlightId(currentPath);
     setSearchText("");
     setCurrentPath(parentDir(currentPath));
   }
@@ -206,18 +211,27 @@ function FileBrowser(props: {
     const resolved = expandHome(target);
     if (resolved === currentPath) return;
     setSearchText("");
+    setHighlightId(undefined);
     setCurrentPath(resolved);
   }
 
   // THE copy/move flow: Tab on any row. Basket non-empty → transfer the
   // basket; otherwise transfer just the highlighted item. Opens the transfer
-  // tree from home, where Enter confirms and ←/→ navigate.
+  // tree (from home or current folder per setting), where Enter confirms
+  // and ←/→ navigate.
   function openTransfer(fallbackPath: string) {
     const sources = selected.length > 0 ? [...selected] : [fallbackPath];
+    let startDir = props.homePath;
+    try {
+      const v = getPreferenceValues<{ transferStart?: string }>();
+      if (v.transferStart === "current") startDir = currentPath;
+    } catch {
+      // Unset preference — home default stands.
+    }
     push(
       <TransferTree
         sources={sources}
-        initialPath={props.homePath}
+        initialPath={startDir}
         showHidden={props.showHidden}
         onDone={(destDir) => {
           // Reveal the results: open the destination, not the origin.
@@ -261,20 +275,22 @@ function FileBrowser(props: {
       searchText={searchText}
       onSearchTextChange={setSearchText}
       filtering={true}
+      selectedItemId={highlightId}
+      onSelectionChange={(id) => setHighlightId(id ?? undefined)}
       isShowingDetail={props.showDetail && entries.length > 0}
     >
       <List.Section
-        title={currentPath}
-        subtitle={
+        title={
           selected.length > 0
-            ? `${entries.length} items · ${selected.length} selected`
+            ? `${entries.length} items · ${selected.length} selected · Tab transfers`
             : `${entries.length} items`
         }
       >
         {selected.length > 0 ? (
           <List.Item
+            id="__selection"
             title={`${selected.length} Selected — Tab to Transfer`}
-            subtitle="Tab opens the transfer tree from home, Enter confirms there"
+            subtitle="Tab opens the transfer tree, Enter confirms there"
             icon={{ source: Icon.CheckCircle, tintColor: Color.Green }}
             keywords={["selection", "selected", "transfer"]}
             quickLook={{
@@ -356,7 +372,7 @@ function FileBrowser(props: {
           title="Empty folder"
           description={
             selected.length > 0
-              ? "Tab transfers your selection from home, ← goes up"
+              ? "Tab transfers your selection, ← goes up"
               : "Press ← to go up"
           }
           actions={
@@ -448,6 +464,7 @@ function FileRow(props: {
 
   return (
     <List.Item
+      id={entry.fullPath}
       title={props.isSelected ? `✓ ${entry.name}` : entry.name}
       subtitle={entry.isDirectory ? undefined : formatSize(entry.size, false)}
       accessories={accessories}
@@ -699,10 +716,7 @@ function detailMarkdown(entry: FileEntry, isSelected: boolean): string {
     isSelected ? `Selected ✓` : ``,
   ];
   if (entry.isDirectory) {
-    lines.push(
-      "",
-      "Space or → enters, ← goes up. X selects, Tab transfers from home.",
-    );
+    lines.push("", "Space or → enters, ← goes up. X selects, Tab transfers.");
   } else if (entry.extension === ".md" || entry.extension === ".txt") {
     lines.push(
       "",

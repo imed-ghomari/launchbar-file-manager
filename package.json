@@ -4,20 +4,24 @@
   "title": "LaunchBar File Manager",
   "description": "LaunchBar-style file browsing inside Raycast: drill with keyboard, preview, copy move rename trash.",
   "icon": "icon.png",
-  "author": "you",
+  "author": "imed",
   "license": "MIT",
+  "platforms": ["macOS"],
+  "categories": ["Productivity", "System"],
   "commands": [
     {
       "name": "browse-files",
       "title": "Browse Files",
       "description": "Browse filesystem LaunchBar-style with quick file operations",
-      "mode": "view"
+      "mode": "view",
+      "keywords": ["files", "browse", "finder", "manager", "folders"]
     },
     {
       "name": "finder-selection",
       "title": "Act on Finder Selection",
       "description": "Act on files currently selected in Finder (Instant Send style)",
-      "mode": "view"
+      "mode": "view",
+      "keywords": ["finder", "selection", "send"]
     }
   ],
   "preferences": [
@@ -37,6 +41,18 @@
       "required": false,
       "label": "Show hidden files",
       "default": false
+    },
+    {
+      "name": "transferStart",
+      "title": "Transfer start folder",
+      "description": "Where the Tab transfer tree starts browsing",
+      "type": "dropdown",
+      "required": false,
+      "default": "home",
+      "data": [
+        { "title": "Home folder", "value": "home" },
+        { "title": "Current folder", "value": "current" }
+      ]
     }
   ],
   "dependencies": {

@@ -81,11 +81,6 @@ export function TransferTree(props: {
     () => sources.map((s) => path.basename(s)),
     [sources],
   );
-
-  // Bare Space previews only when NOT typing a filter — otherwise Space
-  // must type into the search bar like normal.
-  const spaceShortcut: { modifiers: []; key: "space" } | undefined =
-    searchText.length > 0 ? undefined : { modifiers: [], key: "space" };
   const crumbs = currentPath.replace(/^\/Users\/[^/]+/, "~");
 
   function enter(dir: string) {
@@ -244,7 +239,9 @@ export function TransferTree(props: {
                     shortcut={{ modifiers: [], key: "arrowLeft" }}
                     onAction={goUp}
                   />
-                  <Action.ToggleQuickLook shortcut={spaceShortcut} />
+                  <Action.ToggleQuickLook
+                    shortcut={{ modifiers: [], key: "space" }}
+                  />
                   <Action
                     title="Cancel Transfer"
                     icon={Icon.XMarkCircle}
@@ -281,7 +278,9 @@ export function TransferTree(props: {
                     shortcut={{ modifiers: [], key: "arrowLeft" }}
                     onAction={goUp}
                   />
-                  <Action.ToggleQuickLook shortcut={spaceShortcut} />
+                  <Action.ToggleQuickLook
+                    shortcut={{ modifiers: [], key: "space" }}
+                  />
                   <Action
                     title="Cancel Transfer"
                     icon={Icon.XMarkCircle}

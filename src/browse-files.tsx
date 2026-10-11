@@ -31,6 +31,14 @@ import {
   listDir,
   parentDir,
 } from "./fs-utils";
+import {
+  addPaths,
+  clearSelection as clearGlobalSelection,
+  removePaths,
+  togglePath,
+  useGlobalSelection,
+} from "./selection-store";
+import { copyManyWithProgress, moveManyWithProgress } from "./copy-progress";
 
 type Prefs = {
   startingPath?: string;
@@ -77,7 +85,8 @@ function FileBrowser(props: {
   const { push, pop } = useNavigation();
   const [currentPath] = useState(props.initialPath);
   const [searchText, setSearchText] = useState("");
-  const [selected, setSelected] = useState<string[]>([]);
+  // Global basket: survives push/pop so selection stays visible up the hierarchy.
+  const { selected, toggle, add, clear } = useGlobalSelection();
 
   const { data, isLoading, revalidate } = usePromise(
     async (dir: string, hidden: boolean) => {
@@ -107,38 +116,44 @@ function FileBrowser(props: {
   );
 
   function toggleSelect(fullPath: string) {
-    setSelected((prev) =>
-      prev.includes(fullPath)
-        ? prev.filter((p) => p !== fullPath)
-        : [...prev, fullPath],
-    );
+    togglePath(fullPath);
+    void toggle;
   }
 
   function selectAll() {
-    setSelected(entries.map((e) => e.fullPath));
+    addPaths(entries.map((e) => e.fullPath));
+    void add;
   }
 
   function selectFiltered() {
-    const paths = filteredEntries.map((e) => e.fullPath);
-    setSelected((prev) => Array.from(new Set([...prev, ...paths])));
+    addPaths(filteredEntries.map((e) => e.fullPath));
   }
 
   function clearSelection() {
-    setSelected([]);
+    clearGlobalSelection();
+    void clear;
   }
 
-  function pruneSelection() {
-    // Drop paths that no longer exist (after trash/move)
-    setSelected((prev) => {
-      const live = new Set(entries.map((e) => e.fullPath));
-      const kept = prev.filter((p) => live.has(p));
-      return kept.length === prev.length ? prev : kept;
-    });
+  async function pruneMissing() {
+    // Drop only paths that no longer exist on disk — NOT paths from other
+    // folders. Old code pruned against current-folder entries, which wiped
+    // cross-folder selections as soon as you navigated.
+    const gone: string[] = [];
+    await Promise.all(
+      selected.map(async (p) => {
+        try {
+          await fs.access(p);
+        } catch {
+          gone.push(p);
+        }
+      }),
+    );
+    if (gone.length > 0) removePaths(gone);
   }
 
   async function refresh() {
-    pruneSelection();
     await revalidate();
+    await pruneMissing();
   }
 
   // FIX (back-nav bug): previously enterFolder/jumpTo mutated this view's
@@ -191,10 +206,14 @@ function FileBrowser(props: {
             : `${entries.length} items`
         }
       >
-        {selectedEntries.length > 0 ? (
+        {selected.length > 0 ? (
           <List.Item
-            title={`${selectedEntries.length} Selected`}
-            subtitle="Batch actions — trash, copy, move"
+            title={`${selected.length} Selected`}
+            subtitle={
+              selectedEntries.length === selected.length
+                ? "Batch actions — trash, copy, move (stays until cleared)"
+                : `${selectedEntries.length} in this folder · ${selected.length} total — stays until cleared`
+            }
             icon={{ source: Icon.CheckCircle, tintColor: Color.Green }}
             keywords={["selection", "selected", "batch"]}
             actions={
@@ -204,13 +223,9 @@ function FileBrowser(props: {
                   icon={Icon.Trash}
                   style={Action.Style.Destructive}
                   onAction={() =>
-                    trashPaths(
-                      selectedEntries.map((e) => e.fullPath),
-                      () => {
-                        clearSelection();
-                        refresh();
-                      },
-                    )
+                    trashPaths([...selected], () => {
+                      refresh();
+                    })
                   }
                 />
                 <ActionPanel.Submenu
@@ -222,11 +237,7 @@ function FileBrowser(props: {
                       key={f.path}
                       title={f.title}
                       onAction={() =>
-                        copyPathsTo(
-                          selectedEntries.map((e) => e.fullPath),
-                          f.path,
-                          () => refresh(),
-                        )
+                        copyPathsTo([...selected], f.path, () => refresh())
                       }
                     />
                   ))}
@@ -237,26 +248,17 @@ function FileBrowser(props: {
                       key={f.path}
                       title={f.title}
                       onAction={() =>
-                        movePathsTo(
-                          selectedEntries.map((e) => e.fullPath),
-                          f.path,
-                          () => {
-                            clearSelection();
-                            refresh();
-                          },
-                        )
+                        movePathsTo([...selected], f.path, () => {
+                          refresh();
+                        })
                       }
                     />
                   ))}
                 </ActionPanel.Submenu>
                 <Action.CopyToClipboard
                   title="Copy Selected Paths"
-                  content={selectedEntries.map((e) => e.fullPath).join("\n")}
-                  onCopy={() =>
-                    Clipboard.copy(
-                      selectedEntries.map((e) => e.fullPath).join("\n"),
-                    )
-                  }
+                  content={selected.join("\n")}
+                  onCopy={() => Clipboard.copy(selected.join("\n"))}
                 />
                 <Action
                   title="Clear Selection"
@@ -813,19 +815,30 @@ function NewFileForm(props: { dir: string; onDone: () => void }) {
   );
 }
 
-// ---------- Operations (single + batch) ----------
+// ---------- Operations (single + batch, with progress) ----------
 
 async function duplicateEntry(entry: FileEntry, onChanged: () => void) {
-  const dir = path.dirname(entry.fullPath);
-  const dest = path.join(dir, path.basename(entry.fullPath) + " copy");
   const toast = await showToast({
     style: Toast.Style.Animated,
     title: "Duplicating…",
+    message: entry.name,
   });
   try {
-    await fs.cp(entry.fullPath, dest, { recursive: true });
-    toast.style = Toast.Style.Success;
-    toast.title = "Duplicated";
+    const r = await copyManyWithProgress(
+      [entry.fullPath],
+      path.dirname(entry.fullPath),
+      toast,
+      "Duplicating",
+    );
+    if (r.errors.length > 0) {
+      toast.style = Toast.Style.Failure;
+      toast.title = "Duplicate had errors";
+      toast.message = r.errors.slice(0, 3).join("\n");
+    } else {
+      toast.style = Toast.Style.Success;
+      toast.title = "Duplicated";
+      toast.message = entry.name;
+    }
     onChanged();
   } catch (e) {
     toast.style = Toast.Style.Failure;
@@ -839,15 +852,27 @@ async function copyToDir(
   destDir: string,
   onChanged: () => void,
 ) {
-  const dest = path.join(destDir, path.basename(entry.fullPath));
   const toast = await showToast({
     style: Toast.Style.Animated,
     title: `Copying to ${destDir}…`,
+    message: entry.name,
   });
   try {
-    await fs.cp(entry.fullPath, dest, { recursive: true });
-    toast.style = Toast.Style.Success;
-    toast.title = "Copied";
+    const r = await copyManyWithProgress(
+      [entry.fullPath],
+      destDir,
+      toast,
+      "Copying",
+    );
+    if (r.errors.length > 0) {
+      toast.style = Toast.Style.Failure;
+      toast.title = "Copy had errors";
+      toast.message = r.errors.slice(0, 3).join("\n");
+    } else {
+      toast.style = Toast.Style.Success;
+      toast.title = "Copied";
+      toast.message = `${entry.name} → ${destDir}`;
+    }
     onChanged();
   } catch (e) {
     toast.style = Toast.Style.Failure;
@@ -861,28 +886,33 @@ async function moveToDir(
   destDir: string,
   onChanged: () => void,
 ) {
-  const dest = path.join(destDir, path.basename(entry.fullPath));
   const toast = await showToast({
     style: Toast.Style.Animated,
     title: `Moving to ${destDir}…`,
+    message: entry.name,
   });
   try {
-    await fs.rename(entry.fullPath, dest);
-    toast.style = Toast.Style.Success;
-    toast.title = "Moved";
-    onChanged();
-  } catch {
-    try {
-      await fs.cp(entry.fullPath, dest, { recursive: true });
-      await trash([entry.fullPath]);
+    const r = await moveManyWithProgress(
+      [entry.fullPath],
+      destDir,
+      toast,
+      "Moving",
+    );
+    if (r.errors.length > 0) {
+      toast.style = Toast.Style.Failure;
+      toast.title = "Move had errors";
+      toast.message = r.errors.slice(0, 3).join("\n");
+    } else {
       toast.style = Toast.Style.Success;
       toast.title = "Moved";
-      onChanged();
-    } catch (e2) {
-      toast.style = Toast.Style.Failure;
-      toast.title = "Move failed";
-      toast.message = String(e2);
+      toast.message = `${entry.name} → ${destDir}`;
     }
+    removePaths([entry.fullPath]);
+    onChanged();
+  } catch (e) {
+    toast.style = Toast.Style.Failure;
+    toast.title = "Move failed";
+    toast.message = String(e);
   }
 }
 
@@ -898,6 +928,7 @@ async function moveToTrash(entry: FileEntry, onChanged: () => void) {
   if (!ok) return;
   try {
     await trash([entry.fullPath]);
+    removePaths([entry.fullPath]);
     await showToast({ style: Toast.Style.Success, title: "Moved to Trash" });
     onChanged();
   } catch (e) {
@@ -924,6 +955,7 @@ async function trashPaths(fullPaths: string[], onDone: () => void) {
   if (!ok) return;
   try {
     await trash(fullPaths);
+    removePaths(fullPaths);
     await showToast({
       style: Toast.Style.Success,
       title: `Trashed ${fullPaths.length} item${fullPaths.length === 1 ? "" : "s"}`,
@@ -943,18 +975,24 @@ async function copyPathsTo(
   destDir: string,
   onDone: () => void,
 ) {
+  if (fullPaths.length === 0) return;
   const toast = await showToast({
     style: Toast.Style.Animated,
     title: `Copying ${fullPaths.length} items…`,
+    message: `→ ${destDir}`,
   });
   try {
-    for (const src of fullPaths) {
-      await fs.cp(src, path.join(destDir, path.basename(src)), {
-        recursive: true,
-      });
+    const r = await copyManyWithProgress(fullPaths, destDir, toast, "Copying");
+    if (r.errors.length > 0) {
+      toast.style = Toast.Style.Failure;
+      toast.title = `Copied with ${r.errors.length} errors`;
+      toast.message = r.errors.slice(0, 3).join("\n");
+    } else {
+      toast.style = Toast.Style.Success;
+      toast.title = `Copied ${r.copied} item${r.copied === 1 ? "" : "s"}`;
+      toast.message = `→ ${destDir}`;
     }
-    toast.style = Toast.Style.Success;
-    toast.title = "Copied";
+    // Keep selection after copy (sources still exist) — user clears manually.
     onDone();
   } catch (e) {
     toast.style = Toast.Style.Failure;
@@ -968,22 +1006,24 @@ async function movePathsTo(
   destDir: string,
   onDone: () => void,
 ) {
+  if (fullPaths.length === 0) return;
   const toast = await showToast({
     style: Toast.Style.Animated,
     title: `Moving ${fullPaths.length} items…`,
+    message: `→ ${destDir}`,
   });
   try {
-    for (const src of fullPaths) {
-      const dest = path.join(destDir, path.basename(src));
-      try {
-        await fs.rename(src, dest);
-      } catch {
-        await fs.cp(src, dest, { recursive: true });
-        await trash([src]);
-      }
+    const r = await moveManyWithProgress(fullPaths, destDir, toast, "Moving");
+    if (r.errors.length > 0) {
+      toast.style = Toast.Style.Failure;
+      toast.title = `Moved with ${r.errors.length} errors`;
+      toast.message = r.errors.slice(0, 3).join("\n");
+    } else {
+      toast.style = Toast.Style.Success;
+      toast.title = `Moved ${r.moved} item${r.moved === 1 ? "" : "s"}`;
+      toast.message = `→ ${destDir}`;
     }
-    toast.style = Toast.Style.Success;
-    toast.title = "Moved";
+    removePaths(fullPaths);
     onDone();
   } catch (e) {
     toast.style = Toast.Style.Failure;

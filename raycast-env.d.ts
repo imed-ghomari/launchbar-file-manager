@@ -8,9 +8,9 @@
 /* eslint-disable @typescript-eslint/ban-types */
 
 type ExtensionPreferences = {
-  /** undefined - Folder to open when the command starts */
+  /** Starting folder - Folder to open when the command starts */
   "startingPath": string,
-  /** undefined - Show hidden files by default */
+  /** View options - Show hidden files by default */
   "showHiddenDefault": boolean
 }
 

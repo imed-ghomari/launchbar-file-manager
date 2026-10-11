@@ -1,8 +1,10 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Action,
   ActionPanel,
   Alert,
+  Clipboard,
+  Color,
   Form,
   Icon,
   List,
@@ -13,6 +15,7 @@ import {
   showInFinder,
   showToast,
   useNavigation,
+  Keyboard,
 } from "@raycast/api";
 import { usePromise } from "@raycast/utils";
 import { promises as fs } from "node:fs";
@@ -58,6 +61,12 @@ export default function Command() {
   );
 }
 
+function matchesFilter(name: string, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return name.toLowerCase().includes(q);
+}
+
 function FileBrowser(props: {
   initialPath: string;
   showHidden: boolean;
@@ -66,7 +75,9 @@ function FileBrowser(props: {
   onToggleDetail: () => void;
 }) {
   const { push, pop } = useNavigation();
-  const [currentPath, setCurrentPath] = useState(props.initialPath);
+  const [currentPath] = useState(props.initialPath);
+  const [searchText, setSearchText] = useState("");
+  const [selected, setSelected] = useState<string[]>([]);
 
   const { data, isLoading, revalidate } = usePromise(
     async (dir: string, hidden: boolean) => {
@@ -84,8 +95,56 @@ function FileBrowser(props: {
     [currentPath, props.showHidden],
   );
 
+  const entries = useMemo(() => data ?? [], [data]);
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
+  const selectedEntries = useMemo(
+    () => entries.filter((e) => selectedSet.has(e.fullPath)),
+    [entries, selectedSet],
+  );
+  const filteredEntries = useMemo(
+    () => entries.filter((e) => matchesFilter(e.name, searchText)),
+    [entries, searchText],
+  );
+
+  function toggleSelect(fullPath: string) {
+    setSelected((prev) =>
+      prev.includes(fullPath)
+        ? prev.filter((p) => p !== fullPath)
+        : [...prev, fullPath],
+    );
+  }
+
+  function selectAll() {
+    setSelected(entries.map((e) => e.fullPath));
+  }
+
+  function selectFiltered() {
+    const paths = filteredEntries.map((e) => e.fullPath);
+    setSelected((prev) => Array.from(new Set([...prev, ...paths])));
+  }
+
+  function clearSelection() {
+    setSelected([]);
+  }
+
+  function pruneSelection() {
+    // Drop paths that no longer exist (after trash/move)
+    setSelected((prev) => {
+      const live = new Set(entries.map((e) => e.fullPath));
+      const kept = prev.filter((p) => live.has(p));
+      return kept.length === prev.length ? prev : kept;
+    });
+  }
+
+  async function refresh() {
+    pruneSelection();
+    await revalidate();
+  }
+
+  // FIX (back-nav bug): previously enterFolder/jumpTo mutated this view's
+  // currentPath AND pushed a new view, corrupting the parent when popping.
+  // Now each pushed view owns its path — no mutation of the parent.
   function enterFolder(folderPath: string) {
-    setCurrentPath(folderPath);
     push(
       <FileBrowser
         initialPath={folderPath}
@@ -99,7 +158,7 @@ function FileBrowser(props: {
 
   function jumpTo(target: string) {
     const resolved = expandHome(target);
-    setCurrentPath(resolved);
+    if (resolved === currentPath) return;
     push(
       <FileBrowser
         initialPath={resolved}
@@ -112,46 +171,176 @@ function FileBrowser(props: {
   }
 
   const crumbs = currentPath.replace(/^\/Users\/[^/]+/, "~");
+  const isRoot = currentPath === parentDir(currentPath);
 
   return (
     <List
       isLoading={isLoading}
       navigationTitle={crumbs}
-      searchBarPlaceholder={`Search in ${path.basename(currentPath) || currentPath} — → enter, ← back`}
-      isShowingDetail={props.showDetail && (data?.length ?? 0) > 0}
+      searchBarPlaceholder={`Filter + ↑↓, X select, → enter, ← back (${selected.length} selected)`}
+      searchText={searchText}
+      onSearchTextChange={setSearchText}
+      filtering={true}
+      isShowingDetail={props.showDetail && entries.length > 0}
     >
-      <List.Section title={currentPath} subtitle={`${data?.length ?? 0} items`}>
-        {currentPath !== parentDir(currentPath) ? (
+      <List.Section
+        title={currentPath}
+        subtitle={
+          selected.length > 0
+            ? `${entries.length} items · ${selected.length} selected`
+            : `${entries.length} items`
+        }
+      >
+        {selectedEntries.length > 0 ? (
+          <List.Item
+            title={`${selectedEntries.length} Selected`}
+            subtitle="Batch actions — trash, copy, move"
+            icon={{ source: Icon.CheckCircle, tintColor: Color.Green }}
+            keywords={["selection", "selected", "batch"]}
+            actions={
+              <ActionPanel>
+                <Action
+                  title="Trash Selected"
+                  icon={Icon.Trash}
+                  style={Action.Style.Destructive}
+                  onAction={() =>
+                    trashPaths(
+                      selectedEntries.map((e) => e.fullPath),
+                      () => {
+                        clearSelection();
+                        refresh();
+                      },
+                    )
+                  }
+                />
+                <ActionPanel.Submenu
+                  title="Copy Selected to"
+                  icon={Icon.Clipboard}
+                >
+                  {FAVORITES.map((f) => (
+                    <Action
+                      key={f.path}
+                      title={f.title}
+                      onAction={() =>
+                        copyPathsTo(
+                          selectedEntries.map((e) => e.fullPath),
+                          f.path,
+                          () => refresh(),
+                        )
+                      }
+                    />
+                  ))}
+                </ActionPanel.Submenu>
+                <ActionPanel.Submenu title="Move Selected to" icon={Icon.Move}>
+                  {FAVORITES.map((f) => (
+                    <Action
+                      key={f.path}
+                      title={f.title}
+                      onAction={() =>
+                        movePathsTo(
+                          selectedEntries.map((e) => e.fullPath),
+                          f.path,
+                          () => {
+                            clearSelection();
+                            refresh();
+                          },
+                        )
+                      }
+                    />
+                  ))}
+                </ActionPanel.Submenu>
+                <Action.CopyToClipboard
+                  title="Copy Selected Paths"
+                  content={selectedEntries.map((e) => e.fullPath).join("\n")}
+                  onCopy={() =>
+                    Clipboard.copy(
+                      selectedEntries.map((e) => e.fullPath).join("\n"),
+                    )
+                  }
+                />
+                <Action
+                  title="Clear Selection"
+                  icon={Icon.XMarkCircle}
+                  shortcut={{ modifiers: ["cmd", "shift"], key: "x" }}
+                  onAction={clearSelection}
+                />
+                {!isRoot ? (
+                  <Action
+                    title="Go Back"
+                    icon={Icon.ArrowLeft}
+                    shortcut={{ modifiers: [], key: "arrowLeft" }}
+                    onAction={() => pop()}
+                  />
+                ) : null}
+              </ActionPanel>
+            }
+          />
+        ) : null}
+        {!isRoot ? (
           <List.Item
             title=".."
-            subtitle="Parent folder"
+            subtitle="Parent folder (←)"
             icon={Icon.ArrowUp}
             keywords={["up", "back", "parent"]}
             actions={
               <ActionPanel>
                 <Action
-                  title="Go to Parent Folder"
+                  title="Go Back"
                   icon={Icon.ArrowLeft}
+                  shortcut={{ modifiers: [], key: "arrowLeft" }}
+                  onAction={() => pop()}
+                />
+                <Action
+                  title="Go Back Alternative"
+                  icon={Icon.ArrowLeft}
+                  shortcut={{ modifiers: ["cmd"], key: "[" }}
                   onAction={() => pop()}
                 />
               </ActionPanel>
             }
           />
         ) : null}
-        {(data ?? []).map((entry) => (
+        {entries.map((entry) => (
           <FileRow
             key={entry.fullPath}
             entry={entry}
             currentPath={currentPath}
             showDetail={props.showDetail}
+            isSelected={selectedSet.has(entry.fullPath)}
+            selectedCount={selected.length}
+            searchActive={searchText.trim().length > 0}
+            onToggleSelect={() => toggleSelect(entry.fullPath)}
+            onSelectAll={selectAll}
+            onSelectFiltered={selectFiltered}
+            onClearSelection={clearSelection}
             onEnterFolder={enterFolder}
             onJump={jumpTo}
-            onChanged={revalidate}
+            onChanged={refresh}
             onToggleHidden={props.onToggleHidden}
             onToggleDetail={props.onToggleDetail}
+            onGoBack={() => pop()}
           />
         ))}
       </List.Section>
+      {entries.length === 0 && !isLoading ? (
+        <List.EmptyView
+          icon={Icon.Folder}
+          title="Empty folder"
+          description="Press ← to go back"
+          actions={
+            <ActionPanel>
+              {!isRoot ? (
+                <Action
+                  title="Go Back"
+                  icon={Icon.ArrowLeft}
+                  shortcut={{ modifiers: [], key: "arrowLeft" }}
+                  onAction={() => pop()}
+                />
+              ) : null}
+            </ActionPanel>
+          }
+        />
+      ) : null}
     </List>
   );
 }
@@ -160,18 +349,38 @@ function FileRow(props: {
   entry: FileEntry;
   currentPath: string;
   showDetail: boolean;
+  isSelected: boolean;
+  selectedCount: number;
+  searchActive: boolean;
+  onToggleSelect: () => void;
+  onSelectAll: () => void;
+  onSelectFiltered: () => void;
+  onClearSelection: () => void;
   onEnterFolder: (p: string) => void;
   onJump: (p: string) => void;
   onChanged: () => void;
   onToggleHidden: () => void;
   onToggleDetail: () => void;
+  onGoBack: () => void;
 }) {
   const { entry, onEnterFolder, onChanged } = props;
-  const icon = entry.isDirectory ? Icon.Folder : fileIcon(entry.extension);
+  const baseIcon = entry.isDirectory ? Icon.Folder : fileIcon(entry.extension);
+  const icon = props.isSelected
+    ? { source: Icon.CheckCircle, tintColor: Color.Green }
+    : baseIcon;
+
+  const accessories: List.Item.Accessory[] = [];
+  if (props.isSelected) {
+    accessories.push({ tag: { value: "Selected", color: Color.Green } });
+  }
+  accessories.push({
+    text: entry.isDirectory ? "Folder" : fileKind(entry),
+  });
+  accessories.push({ date: entry.mtime });
 
   const detail = props.showDetail ? (
     <List.Item.Detail
-      markdown={detailMarkdown(entry)}
+      markdown={detailMarkdown(entry, props.isSelected)}
       metadata={
         <List.Item.Detail.Metadata>
           <List.Item.Detail.Metadata.Label
@@ -187,6 +396,10 @@ function FileRow(props: {
             text={formatDate(entry.mtime)}
           />
           <List.Item.Detail.Metadata.Separator />
+          <List.Item.Detail.Metadata.Label
+            title="Selected"
+            text={props.isSelected ? "Yes" : "No"}
+          />
           <List.Item.Detail.Metadata.Label title="Path" text={entry.fullPath} />
           <List.Item.Detail.Metadata.Label title="Name" text={entry.name} />
         </List.Item.Detail.Metadata>
@@ -196,12 +409,9 @@ function FileRow(props: {
 
   return (
     <List.Item
-      title={entry.name}
+      title={props.isSelected ? `✓ ${entry.name}` : entry.name}
       subtitle={entry.isDirectory ? undefined : formatSize(entry.size, false)}
-      accessories={[
-        { text: entry.isDirectory ? "Folder" : fileKind(entry) },
-        { date: entry.mtime },
-      ]}
+      accessories={accessories}
       icon={icon}
       keywords={[entry.name, entry.extension]}
       detail={detail}
@@ -222,19 +432,64 @@ function FileRow(props: {
               onAction={() => open(entry.fullPath)}
             />
           )}
+          {/* FIX 1 — back navigation on EVERY row so ← always works */}
+          <Action
+            title="Go Back"
+            icon={Icon.ArrowLeft}
+            shortcut={{ modifiers: [], key: "arrowLeft" }}
+            onAction={props.onGoBack}
+          />
+          <Action
+            title="Go Back Alternative"
+            icon={Icon.ArrowLeft}
+            shortcut={{ modifiers: ["cmd"], key: "[" }}
+            onAction={props.onGoBack}
+          />
           <Action
             title="Show in Finder"
             icon={Icon.Finder}
-            shortcut={{ modifiers: ["cmd"], key: "o" }}
+            shortcut={Keyboard.Shortcut.Common.Open}
             onAction={() => showInFinder(entry.fullPath)}
           />
           <Action.ToggleQuickLook />
+
+          {/* FIX 2 — multi-select: filter, ↑↓ to highlight, X to select */}
+          <ActionPanel.Section title="Select">
+            <Action
+              title={props.isSelected ? "Deselect" : "Select"}
+              icon={props.isSelected ? Icon.XMarkCircle : Icon.CheckCircle}
+              shortcut={{ modifiers: [], key: "x" }}
+              onAction={props.onToggleSelect}
+            />
+            <Action
+              title="Select All in Folder"
+              icon={Icon.CheckRosette}
+              shortcut={{ modifiers: ["cmd", "shift"], key: "a" }}
+              onAction={props.onSelectAll}
+            />
+            {props.searchActive ? (
+              <Action
+                title="Select Filtered Results"
+                icon={Icon.MagnifyingGlass}
+                shortcut={{ modifiers: ["cmd", "shift"], key: "f" }}
+                onAction={props.onSelectFiltered}
+              />
+            ) : null}
+            {props.selectedCount > 0 ? (
+              <Action
+                title={`Clear Selection (${props.selectedCount})`}
+                icon={Icon.Trash}
+                shortcut={{ modifiers: ["cmd", "shift"], key: "x" }}
+                onAction={props.onClearSelection}
+              />
+            ) : null}
+          </ActionPanel.Section>
 
           <ActionPanel.Section title="LaunchBar-style ops">
             <Action.Push
               title="Rename…"
               icon={Icon.Pencil}
-              shortcut={{ modifiers: ["cmd"], key: "r" }}
+              shortcut={Keyboard.Shortcut.Common.Refresh}
               target={<RenameForm entry={entry} onDone={onChanged} />}
             />
             <Action
@@ -244,9 +499,9 @@ function FileRow(props: {
               onAction={() => duplicateEntry(entry, onChanged)}
             />
             <ActionPanel.Submenu
-              title="Copy To…"
+              title="Copy to…"
               icon={Icon.Clipboard}
-              shortcut={{ modifiers: ["cmd", "shift"], key: "c" }}
+              shortcut={Keyboard.Shortcut.Common.Copy}
             >
               {FAVORITES.map((f) => (
                 <Action
@@ -257,7 +512,7 @@ function FileRow(props: {
               ))}
             </ActionPanel.Submenu>
             <ActionPanel.Submenu
-              title="Move To…"
+              title="Move to…"
               icon={Icon.Move}
               shortcut={{ modifiers: ["cmd", "shift"], key: "m" }}
             >
@@ -299,7 +554,7 @@ function FileRow(props: {
             <Action.CopyToClipboard
               title="Copy Path"
               content={entry.fullPath}
-              shortcut={{ modifiers: ["cmd", "opt"], key: "c" }}
+              shortcut={Keyboard.Shortcut.Common.CopyName}
             />
             <Action.CopyToClipboard
               title="Copy File Name"
@@ -321,7 +576,7 @@ function FileRow(props: {
             <Action
               title="Toggle Hidden Files"
               icon={Icon.Eye}
-              shortcut={{ modifiers: ["cmd"], key: "." }}
+              shortcut={Keyboard.Shortcut.Common.Pin}
               onAction={props.onToggleHidden}
             />
           </ActionPanel.Section>
@@ -386,13 +641,14 @@ function fileIcon(ext: string) {
   }
 }
 
-function detailMarkdown(entry: FileEntry): string {
+function detailMarkdown(entry: FileEntry, isSelected: boolean): string {
   const lines = [
     `# ${entry.name}`,
     ``,
     `${fileKind(entry)} · ${formatSize(entry.size, entry.isDirectory)}`,
     ``,
     `Modified: ${formatDate(entry.mtime)}`,
+    isSelected ? `Selected ✓` : ``,
   ];
   if (entry.isDirectory) {
     lines.push(
@@ -557,7 +813,7 @@ function NewFileForm(props: { dir: string; onDone: () => void }) {
   );
 }
 
-// ---------- Operations ----------
+// ---------- Operations (single + batch) ----------
 
 async function duplicateEntry(entry: FileEntry, onChanged: () => void) {
   const dir = path.dirname(entry.fullPath);
@@ -650,5 +906,88 @@ async function moveToTrash(entry: FileEntry, onChanged: () => void) {
       title: "Trash failed",
       message: String(e),
     });
+  }
+}
+
+async function trashPaths(fullPaths: string[], onDone: () => void) {
+  if (fullPaths.length === 0) return;
+  const ok = await confirmAlert({
+    title: `Move ${fullPaths.length} item${fullPaths.length === 1 ? "" : "s"} to Trash?`,
+    message:
+      fullPaths.slice(0, 5).join("\n") +
+      (fullPaths.length > 5 ? `\n…+${fullPaths.length - 5} more` : ""),
+    primaryAction: {
+      title: "Move to Trash",
+      style: Alert.ActionStyle.Destructive,
+    },
+  });
+  if (!ok) return;
+  try {
+    await trash(fullPaths);
+    await showToast({
+      style: Toast.Style.Success,
+      title: `Trashed ${fullPaths.length} item${fullPaths.length === 1 ? "" : "s"}`,
+    });
+    onDone();
+  } catch (e) {
+    await showToast({
+      style: Toast.Style.Failure,
+      title: "Trash failed",
+      message: String(e),
+    });
+  }
+}
+
+async function copyPathsTo(
+  fullPaths: string[],
+  destDir: string,
+  onDone: () => void,
+) {
+  const toast = await showToast({
+    style: Toast.Style.Animated,
+    title: `Copying ${fullPaths.length} items…`,
+  });
+  try {
+    for (const src of fullPaths) {
+      await fs.cp(src, path.join(destDir, path.basename(src)), {
+        recursive: true,
+      });
+    }
+    toast.style = Toast.Style.Success;
+    toast.title = "Copied";
+    onDone();
+  } catch (e) {
+    toast.style = Toast.Style.Failure;
+    toast.title = "Copy failed";
+    toast.message = String(e);
+  }
+}
+
+async function movePathsTo(
+  fullPaths: string[],
+  destDir: string,
+  onDone: () => void,
+) {
+  const toast = await showToast({
+    style: Toast.Style.Animated,
+    title: `Moving ${fullPaths.length} items…`,
+  });
+  try {
+    for (const src of fullPaths) {
+      const dest = path.join(destDir, path.basename(src));
+      try {
+        await fs.rename(src, dest);
+      } catch {
+        await fs.cp(src, dest, { recursive: true });
+        await trash([src]);
+      }
+    }
+    toast.style = Toast.Style.Success;
+    toast.title = "Moved";
+    onDone();
+  } catch (e) {
+    toast.style = Toast.Style.Failure;
+    toast.title = "Move failed";
+    toast.message = String(e);
   }
 }

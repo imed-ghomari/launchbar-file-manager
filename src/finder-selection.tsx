@@ -5,6 +5,7 @@ import {
   List,
   Toast,
   showToast,
+  Keyboard,
 } from "@raycast/api";
 import { usePromise } from "@raycast/utils";
 import { promises as fs } from "node:fs";
@@ -61,7 +62,7 @@ export default function Command() {
               <Action
                 title="Refresh Selection"
                 icon={Icon.RotateClockwise}
-                shortcut={{ modifiers: ["cmd"], key: "r" }}
+                shortcut={Keyboard.Shortcut.Common.Refresh}
                 onAction={() => revalidate()}
               />
             </ActionPanel>

@@ -11,8 +11,8 @@ Tip: give **Browse Files** a short alias like `fm` and pin it (open Raycast, fin
 Open **Browse Files**. You start in your starting folder (changeable in settings, see below).
 
 - **Move around:** `→` or `Enter` goes into a folder. `←` (or `⌘[`) goes up one folder — and lands the highlight on the folder you just came from, so you never lose your place. `Esc` closes the browser.
-- **Find things:** just start typing to filter the current folder. The search bar always shows live counts, e.g. `128 items · 2 selected`.
-- **Open and preview:** `Space` opens a highlighted folder, or previews a highlighted file with Quick Look. The preview follows as you move up and down the list. `Enter` opens files in their default app.
+- **Find things:** just start typing to filter the current folder — matching is fuzzy, so abbreviations (`vsc` finds Visual Studio Code) and small typos (`documnets` finds Documents) still match. The search bar always shows live counts, e.g. `128 items · 2 selected`.
+- **Open and preview:** `Space` opens a highlighted folder, or previews a highlighted file with Quick Look. The preview follows as you move up and down the list. `Enter` opens files in their default app. **Open With…** (any file or folder) browses `/Applications` for the app you want — type to fuzzy-find it, `Enter` opens your file with it, `←`/`→` step through subfolders like Utilities.
 - **Jump around:** every row has Go actions for Home, Desktop, Documents, Downloads, Applications, and `/`. `⌘.` toggles hidden files, `⌘I` toggles the details pane (size, dates, path).
 
 The list never jumps around while you arrow through it: it stays put until the highlight reaches the edge, then scrolls to reveal more.

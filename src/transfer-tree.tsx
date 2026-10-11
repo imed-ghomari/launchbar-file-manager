@@ -22,12 +22,7 @@ import {
 } from "./fs-utils";
 import { clearAll, removePaths } from "./selection-store";
 import { copyManyWithProgress, moveManyWithProgress } from "./copy-progress";
-
-function matchesFilter(name: string, query: string): boolean {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
-  return name.toLowerCase().includes(q);
-}
+import { fuzzyScore } from "./fuzzy";
 
 function isInside(child: string, parent: string): boolean {
   const rel = path.relative(parent, child);
@@ -99,7 +94,7 @@ export function TransferTree(props: {
     return () => clearTimeout(t);
   }, [highlightId, entries]);
   const visible = useMemo(
-    () => entries.filter((e) => matchesFilter(e.name, searchText)),
+    () => entries.filter((e) => fuzzyScore(searchText, e.name) !== null),
     [entries, searchText],
   );
 

@@ -46,6 +46,8 @@ import {
 } from "./archive";
 import { safeTrash, shortError } from "./trash-safe";
 import { TransferTree } from "./transfer-tree";
+import { AppPicker } from "./app-picker";
+import { fuzzyScore } from "./fuzzy";
 
 type Prefs = {
   startingPath?: string;
@@ -110,12 +112,6 @@ export default function Command() {
   );
 }
 
-function matchesFilter(name: string, query: string): boolean {
-  const q = query.trim().toLowerCase();
-  if (!q) return true;
-  return name.toLowerCase().includes(q);
-}
-
 function FileBrowser(props: {
   initialPath: string;
   /** Home dir from settings — where Tab transfer trees start. */
@@ -175,8 +171,27 @@ function FileBrowser(props: {
     const t = setTimeout(() => setHighlightId(undefined), 350);
     return () => clearTimeout(t);
   }, [highlightId, entries]);
+  // Ranked fuzzy results: dirs first (drill-first UX), then best fuzzy
+  // score, then alphabetical. Empty query keeps the raw folder order.
+  const visibleEntries = useMemo(() => {
+    const q = searchText.trim();
+    if (!q) return entries;
+    return entries
+      .map((e) => ({ entry: e, score: fuzzyScore(q, e.name) }))
+      .filter((x): x is { entry: FileEntry; score: number } => x.score !== null)
+      .sort(
+        (a, b) =>
+          Number(b.entry.isDirectory) - Number(a.entry.isDirectory) ||
+          b.score - a.score ||
+          a.entry.name.localeCompare(b.entry.name, undefined, {
+            sensitivity: "base",
+          }),
+      )
+      .map((x) => x.entry);
+  }, [entries, searchText]);
+
   const filteredEntries = useMemo(
-    () => entries.filter((e) => matchesFilter(e.name, searchText)),
+    () => entries.filter((e) => fuzzyScore(searchText, e.name) !== null),
     [entries, searchText],
   );
 
@@ -273,7 +288,7 @@ function FileBrowser(props: {
       searchBarPlaceholder={`${entries.length} items · ${selected.length} selected — ↑↓ filter, X select, Tab transfer, ← up`}
       searchText={searchText}
       onSearchTextChange={setSearchText}
-      filtering={true}
+      filtering={false}
       selectedItemId={highlightId}
       onSelectionChange={(id) => {
         // Real landing or user move — release. Null (loading gap or
@@ -286,7 +301,7 @@ function FileBrowser(props: {
           and shift the content. Flat items keep the list consistent; the
           counts live in the always-visible search bar instead. */}
       <>
-        {entries.map((entry) => (
+        {visibleEntries.map((entry) => (
           <FileRow
             key={entry.fullPath}
             entry={entry}
@@ -463,6 +478,11 @@ function FileRow(props: {
             icon={Icon.Switch}
             shortcut={{ modifiers: [], key: "tab" }}
             onAction={props.onTransfer}
+          />
+          <Action.Push
+            title="Open with…"
+            icon={Icon.AppWindow}
+            target={<AppPicker filePath={entry.fullPath} />}
           />
           <Action
             title="Go up"

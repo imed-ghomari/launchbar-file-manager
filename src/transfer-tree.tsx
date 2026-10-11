@@ -45,6 +45,12 @@ export function TransferTree(props: {
   showHidden: boolean;
   /** Called with the destination folder so the browser can reveal results. */
   onDone: (destDir: string) => void;
+  /**
+   * Whether this transfer owns the global X-basket (clear on cancel/done).
+   * The Finder-selection command passes false so its sources never disturb
+   * a basket built in the main browser. Defaults to true.
+   */
+  manageBasket?: boolean;
 }) {
   const { pop } = useNavigation();
   const { sources } = props;
@@ -52,8 +58,16 @@ export function TransferTree(props: {
   const [searchText, setSearchText] = useState("");
   const [highlightId, setHighlightId] = useState<string | undefined>(undefined);
 
-  // Esc out of transfer = deselect + back to the normal tree.
-  useEffect(() => () => clearAll(), []);
+  const manageBasket = props.manageBasket !== false;
+
+  // Esc out of transfer = deselect + back to the normal tree (Tab flow
+  // only — the Finder flow leaves the basket alone).
+  useEffect(
+    () => () => {
+      if (manageBasket) clearAll();
+    },
+    [],
+  );
 
   const { data, isLoading } = usePromise(
     async (dir: string, hidden: boolean) => {
@@ -173,9 +187,9 @@ export function TransferTree(props: {
           toast.title = `Moved ${r.moved} Item${r.moved === 1 ? "" : "s"}`;
           toast.message = `→ ${destDir}`;
         }
-        removePaths(sources);
+        if (manageBasket) removePaths(sources);
       }
-      clearAll();
+      if (manageBasket) clearAll();
       props.onDone(destDir);
       pop();
     } catch (e) {

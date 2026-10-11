@@ -18,10 +18,10 @@
     },
     {
       "name": "finder-selection",
-      "title": "Act on Finder Selection",
-      "description": "Act on files currently selected in Finder (Instant Send style)",
+      "title": "Transfer Finder Selection",
+      "description": "Transfer the files currently selected in Finder via the folder tree",
       "mode": "view",
-      "keywords": ["finder", "selection", "send"]
+      "keywords": ["finder", "selection", "transfer", "move", "copy"]
     }
   ],
   "preferences": [

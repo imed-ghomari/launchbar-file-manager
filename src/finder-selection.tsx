@@ -4,71 +4,83 @@ import {
   Icon,
   List,
   Toast,
+  getPreferenceValues,
   showToast,
-  Keyboard,
 } from "@raycast/api";
-import { usePromise } from "@raycast/utils";
-import { promises as fs } from "node:fs";
-import * as path from "node:path";
 import { getSelectedFinderItems } from "@raycast/api";
-import { formatSize } from "./fs-utils";
+import { usePromise } from "@raycast/utils";
+import { expandHome } from "./fs-utils";
+import { TransferTree } from "./transfer-tree";
 
+function getPrefs(): { startingPath?: string; showHiddenDefault?: boolean } {
+  try {
+    return getPreferenceValues<{
+      startingPath?: string;
+      showHiddenDefault?: boolean;
+    }>();
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Transfer Finder Selection: takes whatever is selected in Finder right now
+ * and runs it through the same transfer tree as Tab (browse destination,
+ * Enter on a folder transfers into it, then Copy vs Move). Never touches
+ * the X-basket from the main browser.
+ */
 export default function Command() {
+  const p = getPrefs();
+  const home = expandHome(p.startingPath || "~");
+
   const { data, isLoading, revalidate } = usePromise(async () => {
     try {
       const items = await getSelectedFinderItems();
-      const out: { path: string; isDir: boolean; size: number }[] = [];
-      for (const item of items) {
-        try {
-          const st = await fs.stat(item.path);
-          out.push({ path: item.path, isDir: st.isDirectory(), size: st.size });
-        } catch {
-          out.push({ path: item.path, isDir: false, size: 0 });
-        }
-      }
-      return out;
+      return items.map((item) => item.path);
     } catch {
       await showToast({
         style: Toast.Style.Failure,
         title: "No Finder selection",
         message: "Select files in Finder first, then run this command",
       });
-      return [];
+      return [] as string[];
     }
   }, []);
 
-  return (
-    <List
-      isLoading={isLoading}
-      navigationTitle="Finder Selection — Instant Send style"
-    >
-      <List.EmptyView
-        icon={Icon.Finder}
-        title="Select files in Finder first"
-        description="Then run this command to copy, move, rename, or trash them"
-      />
-      {(data ?? []).map((f) => (
-        <List.Item
-          key={f.path}
-          title={path.basename(f.path)}
-          subtitle={f.isDir ? "Folder" : formatSize(f.size, false)}
-          accessories={[{ text: f.path }]}
-          icon={f.isDir ? Icon.Folder : Icon.Document}
-          quickLook={{ path: f.path, name: path.basename(f.path) }}
+  if (isLoading) {
+    return (
+      <List isLoading={true} searchBarPlaceholder="Reading Finder selection…" />
+    );
+  }
+
+  if (!data || data.length === 0) {
+    return (
+      <List>
+        <List.EmptyView
+          icon={Icon.Finder}
+          title="No Finder selection"
+          description="Select files or folders in Finder, then run again"
           actions={
             <ActionPanel>
-              <Action.CopyToClipboard title="Copy Path" content={f.path} />
-              <Action.ToggleQuickLook />
               <Action
-                title="Refresh Selection"
+                title="Retry"
                 icon={Icon.RotateClockwise}
-                shortcut={Keyboard.Shortcut.Common.Refresh}
                 onAction={() => revalidate()}
               />
             </ActionPanel>
           }
         />
-      ))}
-    </List>
+      </List>
+    );
+  }
+
+  return (
+    <TransferTree
+      sources={data}
+      initialPath={home}
+      showHidden={!!p.showHiddenDefault}
+      onDone={() => undefined}
+      manageBasket={false}
+    />
   );
 }

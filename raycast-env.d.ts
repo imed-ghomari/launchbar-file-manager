@@ -10,6 +10,8 @@
 type ExtensionPreferences = {
   /** Starting folder - Folder to open when the command starts */
   "startingPath": string,
+  /** On open - Begin in the starting folder or the last opened folder */
+  "startBehavior": "start" | "last",
   /** View options - Show hidden files by default */
   "showHiddenDefault": boolean,
   /** Transfer start folder - Where the Tab transfer tree starts browsing */

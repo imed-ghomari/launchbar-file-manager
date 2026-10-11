@@ -31,7 +31,19 @@
       "description": "Folder to open when the command starts",
       "type": "directory",
       "required": false,
-      "default": "/Users/Apple"
+      "default": "~"
+    },
+    {
+      "name": "startBehavior",
+      "title": "On open",
+      "description": "Begin in the starting folder or the last opened folder",
+      "type": "dropdown",
+      "required": false,
+      "default": "start",
+      "data": [
+        { "title": "Starting folder", "value": "start" },
+        { "title": "Last opened folder", "value": "last" }
+      ]
     },
     {
       "name": "showHiddenDefault",

@@ -3,7 +3,6 @@ import {
   Action,
   ActionPanel,
   Alert,
-  Clipboard,
   Color,
   Form,
   Icon,
@@ -51,6 +50,8 @@ import { TransferTree } from "./transfer-tree";
 type Prefs = {
   startingPath?: string;
   showHiddenDefault?: boolean;
+  transferStart?: string;
+  startBehavior?: string;
 };
 
 function getPrefs(): Prefs {
@@ -68,47 +69,38 @@ export default function Command() {
   const start = expandHome(p.startingPath || "~");
   const [showHidden, setShowHidden] = useState<boolean>(!!p.showHiddenDefault);
   const [showDetail, setShowDetail] = useState(false);
-  const [restoredDir, setRestoredDir] = useState<string | null>(null);
-  const [ready, setReady] = useState(false);
+  const [initialDir, setInitialDir] = useState<string | null>(null);
 
-  // Resume where you left off: Esc always exits (Raycast reserves it on root
-  // views), so restore the last folder + basket on reopen instead of losing
-  // context. Deliberate deselect is ⌘⇧X / X.
+  // Startup folder per setting: chosen folder (home) or last opened folder.
+  // The basket is always cleared on open — exiting deselects.
   useEffect(() => {
+    clearAll();
     (async () => {
-      try {
-        const raw = await LocalStorage.getItem<string>(STATE_KEY);
-        if (raw) {
-          const saved = JSON.parse(raw) as {
-            dir?: unknown;
-            selected?: unknown;
-          };
-          if (typeof saved.dir === "string") {
-            try {
+      let dir: string | null = null;
+      if (p.startBehavior === "last") {
+        try {
+          const raw = await LocalStorage.getItem<string>(STATE_KEY);
+          if (raw) {
+            const saved = JSON.parse(raw) as { dir?: unknown };
+            if (typeof saved.dir === "string") {
               const st = await fs.stat(saved.dir);
-              if (st.isDirectory()) setRestoredDir(saved.dir);
-            } catch {
-              // Unreadable — fall back to home below.
+              if (st.isDirectory()) dir = saved.dir;
             }
           }
-          if (Array.isArray(saved.selected)) {
-            addPaths(saved.selected.filter((s) => typeof s === "string"));
-          }
+        } catch {
+          // Unreadable/corrupt — fall back to the chosen folder.
         }
-      } catch {
-        // Corrupt state — fresh start.
-      } finally {
-        setReady(true);
       }
+      setInitialDir(dir ?? start);
     })();
   }, []);
 
-  if (!ready) {
-    return <List isLoading={true} searchBarPlaceholder="Restoring…" />;
+  if (initialDir === null) {
+    return <List isLoading={true} searchBarPlaceholder="Opening…" />;
   }
   return (
     <FileBrowser
-      initialPath={restoredDir ?? start}
+      initialPath={initialDir}
       homePath={start}
       showHidden={showHidden}
       showDetail={showDetail}
@@ -145,14 +137,11 @@ function FileBrowser(props: {
   // navigation. Copy/move happens only via Tab → transfer tree.
   const { selected } = useGlobalSelection();
 
-  // Mirror folder + basket to storage on every change, so an Esc (which
-  // always exits — Raycast reserves it) resumes instead of losing context.
+  // Remember the last opened folder (only the folder — the basket is
+  // always cleared on open, so exiting deselects).
   useEffect(() => {
-    void LocalStorage.setItem(
-      STATE_KEY,
-      JSON.stringify({ dir: currentPath, selected }),
-    );
-  }, [currentPath, selected]);
+    void LocalStorage.setItem(STATE_KEY, JSON.stringify({ dir: currentPath }));
+  }, [currentPath]);
 
   const { data, isLoading, revalidate } = usePromise(
     async (dir: string, hidden: boolean) => {
@@ -221,13 +210,8 @@ function FileBrowser(props: {
   // and ←/→ navigate.
   function openTransfer(fallbackPath: string) {
     const sources = selected.length > 0 ? [...selected] : [fallbackPath];
-    let startDir = props.homePath;
-    try {
-      const v = getPreferenceValues<{ transferStart?: string }>();
-      if (v.transferStart === "current") startDir = currentPath;
-    } catch {
-      // Unset preference — home default stands.
-    }
+    const startDir =
+      getPrefs().transferStart === "current" ? currentPath : props.homePath;
     push(
       <TransferTree
         sources={sources}
@@ -286,63 +270,6 @@ function FileBrowser(props: {
             : `${entries.length} items`
         }
       >
-        {selected.length > 0 ? (
-          <List.Item
-            id="__selection"
-            title={`${selected.length} Selected — Tab to Transfer`}
-            subtitle="Tab opens the transfer tree, Enter confirms there"
-            icon={{ source: Icon.CheckCircle, tintColor: Color.Green }}
-            keywords={["selection", "selected", "transfer"]}
-            quickLook={{
-              path: currentPath,
-              name: path.basename(currentPath) || currentPath,
-            }}
-            actions={
-              <ActionPanel>
-                <Action
-                  title="Transfer Selected… (Tab)"
-                  icon={Icon.Switch}
-                  shortcut={{ modifiers: [], key: "tab" }}
-                  onAction={() => openTransfer(selected[0])}
-                />
-                <ActionPanel.Section title="Selection">
-                  <Action
-                    title="Trash Selected"
-                    icon={Icon.Trash}
-                    style={Action.Style.Destructive}
-                    onAction={() => trashPaths([...selected], () => refresh())}
-                  />
-                  <Action
-                    title="Compress Selected to ZIP Here"
-                    icon={Icon.Box}
-                    onAction={() =>
-                      compressSelected([...selected], currentPath, () =>
-                        refresh(),
-                      )
-                    }
-                  />
-                  <Action.CopyToClipboard
-                    title="Copy Selected Paths"
-                    content={selected.join("\n")}
-                    onCopy={() => Clipboard.copy(selected.join("\n"))}
-                  />
-                  <Action
-                    title="Clear Selection"
-                    icon={Icon.XMarkCircle}
-                    shortcut={{ modifiers: ["cmd", "shift"], key: "x" }}
-                    onAction={clearSelection}
-                  />
-                </ActionPanel.Section>
-                <Action
-                  title="Go up"
-                  icon={Icon.ArrowLeft}
-                  shortcut={{ modifiers: [], key: "arrowLeft" }}
-                  onAction={goUp}
-                />
-              </ActionPanel>
-            }
-          />
-        ) : null}
         {entries.map((entry) => (
           <FileRow
             key={entry.fullPath}
@@ -351,6 +278,7 @@ function FileBrowser(props: {
             showDetail={props.showDetail}
             isSelected={selectedSet.has(entry.fullPath)}
             selectedCount={selected.length}
+            selectedPaths={selected}
             searchActive={searchText.trim().length > 0}
             onToggleSelect={() => toggleSelect(entry.fullPath)}
             onSelectAll={selectAll}
@@ -405,6 +333,7 @@ function FileRow(props: {
   showDetail: boolean;
   isSelected: boolean;
   selectedCount: number;
+  selectedPaths: string[];
   searchActive: boolean;
   onToggleSelect: () => void;
   onSelectAll: () => void;
@@ -419,6 +348,13 @@ function FileRow(props: {
   onGoUp: () => void;
 }) {
   const { entry, onEnterFolder, onChanged } = props;
+  const selectedPaths = props.selectedPaths;
+  function trashSelectedHere() {
+    trashPaths([...selectedPaths], onChanged);
+  }
+  function compressSelectedHere() {
+    compressSelected([...selectedPaths], props.currentPath, onChanged);
+  }
   const baseIcon = entry.isDirectory ? Icon.Folder : fileIcon(entry.extension);
   const icon = props.isSelected
     ? { source: Icon.CheckCircle, tintColor: Color.Green }
@@ -554,12 +490,29 @@ function FileRow(props: {
               />
             ) : null}
             {props.selectedCount > 0 ? (
-              <Action
-                title={`Clear Selection (${props.selectedCount})`}
-                icon={Icon.Trash}
-                shortcut={{ modifiers: ["cmd", "shift"], key: "x" }}
-                onAction={props.onClearSelection}
-              />
+              <>
+                <Action
+                  title={`Trash Selected (${props.selectedCount})`}
+                  icon={Icon.Trash}
+                  style={Action.Style.Destructive}
+                  onAction={() => trashSelectedHere()}
+                />
+                <Action
+                  title="Compress Selected to ZIP Here"
+                  icon={Icon.Box}
+                  onAction={() => compressSelectedHere()}
+                />
+                <Action.CopyToClipboard
+                  title="Copy Selected Paths"
+                  content={selectedPaths.join("\n")}
+                />
+                <Action
+                  title={`Clear Selection (${props.selectedCount})`}
+                  icon={Icon.XMarkCircle}
+                  shortcut={{ modifiers: ["cmd", "shift"], key: "x" }}
+                  onAction={props.onClearSelection}
+                />
+              </>
             ) : null}
           </ActionPanel.Section>
 
